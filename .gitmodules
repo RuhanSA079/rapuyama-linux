@@ -42,3 +42,4 @@
 	path = linux/kernel/linux
 	url = git@github.com:fluffleswaffles/linux.git
 	branch = e6
+	shallow = true
