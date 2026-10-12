@@ -1,0 +1,44 @@
+[submodule "symbian/FCL.sf.incubator.modemadaptation"]
+	path = symbian/FCL.sf.incubator.modemadaptation
+	url = https://github.com/SymbianSource/FCL.sf.incubator.modemadaptation.git
+	shallow = true
+[submodule "symbian/oss.FCL.sf.adapt.beagleboard"]
+	path = symbian/oss.FCL.sf.adapt.beagleboard
+	url = https://github.com/SymbianSource/oss.FCL.sf.adapt.beagleboard.git
+	shallow = true
+[submodule "symbian/oss.FCL.sf.adapt.NECNaviengine"]
+	path = symbian/oss.FCL.sf.adapt.NECNaviengine
+	url = https://github.com/SymbianSource/oss.FCL.sf.adapt.NECNaviengine.git
+	shallow = true
+[submodule "symbian/oss.FCL.sf.adapt.Qemu"]
+	path = symbian/oss.FCL.sf.adapt.Qemu
+	url = https://github.com/SymbianSource/oss.FCL.sf.adapt.Qemu.git
+	shallow = true
+[submodule "symbian/oss.FCL.sf.adapt.stubs"]
+	path = symbian/oss.FCL.sf.adapt.stubs
+	url = https://github.com/SymbianSource/oss.FCL.sf.adapt.stubs.git
+	shallow = true
+[submodule "symbian/oss.FCL.sf.adapt.TIWLANWL1271"]
+	path = symbian/oss.FCL.sf.adapt.TIWLANWL1271
+	url = https://github.com/SymbianSource/oss.FCL.sf.adapt.TIWLANWL1271.git
+	shallow = true
+[submodule "symbian/oss.FCL.sf.os.kernelhwsrv"]
+	path = symbian/oss.FCL.sf.os.kernelhwsrv
+	url = https://github.com/SymbianSource/oss.FCL.sf.os.kernelhwsrv.git
+	shallow = true
+[submodule "symbian/oss.FCL.sftools.fbf.bootstrap"]
+	path = symbian/oss.FCL.sftools.fbf.bootstrap
+	url = https://github.com/SymbianSource/oss.FCL.sftools.fbf.bootstrap.git
+	shallow = true
+[submodule "tools/src/elf2e32_next"]
+	path = tools/src/elf2e32_next
+	url = git@github.com:fluffleswaffles/elf2e32_next.git
+	shallow = true
+[submodule "tools/src/ensymble"]
+	path = tools/src/ensymble
+	url = git@github.com:fluffleswaffles/ensymble.git
+	shallow = true
+[submodule "linux/kernel/linux"]
+	path = linux/kernel/linux
+	url = git@github.com:fluffleswaffles/linux.git
+	branch = e6
