@@ -12,10 +12,15 @@ memory, visible from the pc), ptdump falls back to `F:` and then `C:` if `E:` fa
 | `scan-app.sis` | `ptdump.ldd` + scan.exe (`scan_app.cpp`) | `map.bin`, `scanidx.bin`, `scandata.bin`, `scan.log`, then `pdiff.bin` | rerun until it says DONE, see below |
 | `runblob.sis` | `runblob.ldd` + test app | `runblob.bin`, `idtest.bin`, `tramp.bin`, `runblob.log` | M0 + identity map / trampoline tests |
 | `wdfind.sis` | `runblob.ldd` + `wdfind_app.cpp` | `wdiff.bin`, `wdfind.log` | timer/watchdog hunt in `0x30000000`, safe. **not run yet** |
+| `timerprobe.sis` | `runblob.ldd` + `timerprobe_app.cpp` | `timerprobe.bin`, `timerprobe.log` | checks the reversed timers (32k counter + ms timer), read only, safe. runs ~1 s |
+| `regprobe.sis` | `runblob.ldd` + `regprobe_app.cpp` | `regprobe.bin`, `regprobe.log` | one reg per call, crash resilient: a reg that kills the phone stays `pending`, **rerun until the log says DONE**. bt ON for the uart part. the first all-in-one version crashed the phone (i2c gated) |
+| `out/kickloop.sis` | `runblob.ldd` + `kickloop_app.cpp` | `kickloop.log` | ONE-WAY watchdog test: mmu off, kicks soc + pmic watchdogs forever. alive for minutes = kicks work |
 | `takeover.sis` | `runblob.ldd` + `runblob_app.cpp` | `runblob.log` | ONE-WAY, kills symbian, battery pull after |
 | `boot.sis` | `runblob.ldd` + `boot_app.cpp` | `boot.log` | ONE-WAY zImage boot, see `linux/boot/README.md` |
 
 Parsers for all the outputs are in `tools/parse_*.py` (they default to `logs/<name>.bin`).
+
+Pack any exe+ldd into a sis: `driver/mksis.sh <exe> <ldd> <out.sis>` (ensymble in podman, python 2.7).
 
 ## Installing (one tap)
 1. Copy the `.sis` to the phone (USB mass storage / Bluetooth / mail).

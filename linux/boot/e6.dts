@@ -2,23 +2,27 @@
 
 /* device tree for the nokia e6 (rapuyama, arm1176jzf-s r0p4, armv6k)
  *
- * the peripheral phys bases below are the REAL ones, pulled from the firmware
- * mmu peripheral mapping table (rom virt 0x80001f9c, see docs/hw-memory-map.md)
- * and confirmed by live probing. what each mmio block actually *is* (uart/intc/
- * timer/watchdog) isnt pinned yet (the hal computes block->addr, its not a flat
- * table), that comes in the adapter phase. the /memory base is a sentinel the
- * booter patches to the allocated chunk phys base (ARM_PATCH_PHYS_VIRT)
+ * peripheral addresses + register layouts are reversed from the firmware
+ * drivers (karap/ekern/power.dll), see docs/driver-re.md. ram ends at
+ * 0x20000000, everything from there up is mmio, NOT reserved dram like i thought
+ * before. the /memory base is a sentinel the booter patches to the allocated
+ * chunk phys base (ARM_PATCH_PHYS_VIRT)
  */
 
 / {
-	compatible = "nokia,e6", "ti,rapuyama";
+	compatible = "nokia,e6", "nokia,rapuyama";
 	model = "Nokia E6-00 (RapuYama)";
 	#address-cells = <1>;
 	#size-cells = <1>;
+	interrupt-parent = <&intc>;
 
 	chosen {
-		bootargs = "console=ttyNULL rootwait panic=-1";
-		/* add "earlycon=...,mmio32,0x........" once the uart base is known */
+		/* console = the bluetooth uart over the N8 test pads J6354 (our tx)
+		 * / J6355 (our rx), 1.8 V! switch bluetooth on in symbian first so
+		 * the block is powered/clocked/muxed. panic=10 + the pmic watchdog
+		 * bring the phone back to symbian if it dies */
+		bootargs = "earlycon keep_bootcon console=ttyNULL panic=10";
+		stdout-path = &uart_bt;
 	};
 
 	cpus {
@@ -31,21 +35,35 @@
 		};
 	};
 
-	/* base 0x1badb002 = SENTINEL, the booter patches it to the chunk phys base */
-	memory@0 {
+	/* all 256 mb: symbian is dead after the jump, and with AUTO_ZRELADDR the
+	 * zImage puts the kernel at (its addr & 0xf8000000) + 0x8000 = 0x10008000,
+	 * which has to be inside /memory. the dtb sits at chunk + 32 mb, always
+	 * >= 0x12000000, above the kernel. (no sentinel any more, so the booter
+	 * leaves this alone) */
+	memory@10000000 {
 		device_type = "memory";
-		reg = <0x1badb002 0x02000000>; /* 32 mb inside the boot chunk */
+		reg = <0x10000000 0x10000000>;
 	};
 
-	/* top of dram regions the firmware reserves (videocore/codec/framebuffers),
-	 * keep linux off them until we know what they are. phys, absolute */
-	reserved-memory {
-		#address-cells = <1>;
-		#size-cells = <1>;
-		ranges;
-		vc_reserved@20000000 {
-			reg = <0x20000000 0x01000000>; /* 0x20000000..0x21000000 */
-			no-map;
+	clocks {
+		/* 0x0249f000 all over the firmware */
+		ref_clk: ref-clk {
+			compatible = "fixed-clock";
+			#clock-cells = <0>;
+			clock-frequency = <38400000>;
+		};
+		/* NKern::FastCounterFrequency() returns 0x8000 */
+		fc_clk: fc-clk {
+			compatible = "fixed-clock";
+			#clock-cells = <0>;
+			clock-frequency = <32768>;
+		};
+		/* i2c functional clock, measured live 13.10 (regprobe): pll 192 mhz
+		 * (0x20032644 = 0x1e2) / 8 (0x20033010 sel 4) = 24 mhz */
+		i2c_fclk: i2c-fclk {
+			compatible = "fixed-clock";
+			#clock-cells = <0>;
+			clock-frequency = <24000000>;
 		};
 	};
 
@@ -55,30 +73,78 @@
 		#size-cells = <1>;
 		ranges;
 
-		/* REAL mmio blocks (phys bases from the firmware)
-		 * what they are is a best guess, confirm/rename in the adapter phase
-		 */
-		/* structured regs (clock/sys ctrl), probably has the WATCHDOG */
-		sysctrl@30000000 {
-			compatible = "nokia,rapuyama-sysctrl";
-			reg = <0x30000000 0x10000>;
+		/* karap irq/fiq dispatchers + Interrupt:: code, 421 lines */
+		intc: interrupt-controller@20400000 {
+			compatible = "nokia,rapuyama-intc";
+			reg = <0x20400000 0x4000>;
+			interrupt-controller;
+			#interrupt-cells = <1>;
 		};
-		/* 4 kb register file (afe/hal shadow) */
-		periph_regfile@40000000 {
-			compatible = "nokia,rapuyama-regfile";
-			reg = <0x40000000 0x1000>;
-		};
-		/* 1 mb peripheral bank (reads FF = clock gated, uart/intc/timer probably here) */
-		periph_bank@40100000 {
-			compatible = "nokia,rapuyama-periph";
-			reg = <0x40100000 0x100000>;
-		};
-		extbank0@8000000 { compatible = "nokia,rapuyama-extbank"; reg = <0x08000000 0x1000>; };
-		extbank1@9000000 { compatible = "nokia,rapuyama-extbank"; reg = <0x09000000 0x1000>; };
 
-		/* TODO once we know which block is which (adapter phase):
-		 * intc@.. timer@.. uart@.. watchdog@.. (most likely inside
-		 * sysctrl@30000000 or periph_bank@40100000)
-		 */
+		/* ms timer (BindMsTick, irq 242) + free running 32k counter (NKern::FastCounter) */
+		timer@20033780 {
+			compatible = "nokia,rapuyama-timer";
+			reg = <0x20033780 0x40>, <0x20033350 0x8>;
+			interrupts = <242>;
+			clocks = <&ref_clk>, <&fc_clk>;
+			clock-names = "ref", "fc";
+		};
+
+		/* clock gates from power_resources.dll, index = PowerResourceManager
+		 * resource id (0x11 = EHwClkI2C1 for i2c, 0x1f = BT uart clock), each
+		 * one turns on its hw gates. all hang off the i2c fclk for now (only
+		 * i2c uses a rate). 0x11 + 0x1f are critical = always on, symbian gates
+		 * them when idle and touching those blocks with the clock off kills
+		 * the phone (regprobe runs 1+2) */
+		cgc: clock-controller@20032f00 {
+			compatible = "nokia,rapuyama-cgc";
+			reg = <0x20032f00 0x300>;
+			clocks = <&i2c_fclk>;
+			#clock-cells = <1>;
+		};
+
+		/* bc02_uart1.PDD, the uart to the bluetooth chip (earlycon only) */
+		uart_bt: serial@20025a00 {
+			compatible = "nokia,rapuyama-uart";
+			reg = <0x20025a00 0x100>;
+			interrupts = <99>, <101>;
+			clocks = <&cgc 0x1f>;
+			current-speed = <115200>;
+		};
+
+		/* pmic watchdog over the cbus master + soc counter, symbian left both
+		 * running, ~48 s after the last kick the phone powers off */
+		watchdog@20030700 {
+			compatible = "nokia,rapuyama-wdt";
+			reg = <0x20030700 0x40>, <0x200336c4 0x4>;
+		};
+
+		/* i2c0.dll: same regs, bits and scl formula as the TI OMAP i2c
+		 * (omap2420 layout, 16 bit regs 4 apart). irq 0x96. LM8320 keypad
+		 * controller (keypad_exp.dll) hangs on i2c */
+		i2c0: i2c@20032200 {
+			compatible = "ti,omap2420-i2c";
+			reg = <0x20032200 0x40>;
+			interrupts = <150>;
+			clocks = <&cgc 0x11>;
+			clock-names = "fck";
+			clock-frequency = <100000>;
+			/* off for the first boots: regprobe run 3 died on OA (+0x28) and
+			 * i2c-omap pokes regs like that at probe */
+			status = "disabled";
+			#address-cells = <1>;
+			#size-cells = <0>;
+		};
+
+		/* egpio.dll, 5 in/out banks + 2 output only banks. second reg =
+		 * pin irq enable/ack/trigger banks, each pin has its own intc line */
+		gpio: gpio@20031900 {
+			compatible = "nokia,rapuyama-gpio";
+			reg = <0x20031900 0x200>, <0x20033400 0x140>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
 	};
 };

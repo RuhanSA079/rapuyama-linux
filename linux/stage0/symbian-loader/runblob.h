@@ -20,6 +20,12 @@ struct TFbFill{
 	TUint32 iColor;
 };
 
+// timer probe output: [0]magic [1..4] before (tick,fc,mst cnt,mst reload)
+// [5..36] 16x (fc, mst cnt) 100us apart [37..40] after 1 s sleep (tick,fc,mst cnt,mst reload)
+const TInt KTimerProbeWords=41;
+const TUint32 KTimerProbeMagic=0x7e570001u;
+const TInt KRegProbeMax=64;
+
 // booter params
 // copy iLen bytes from user iSrc into boot chunk + iOffset
 struct TLoadChunk{
@@ -40,7 +46,7 @@ class RRunBlob : public RBusLogicalChannel{
 		enum TControl{EControlRunBlob, EControlIdentityTest, EControlTrampTest,
 			EControlFullTramp, EControlFbFill, EControlTakeover,
 			EControlAllocBoot, EControlLoadChunk, EControlBoot,
-			EControlTimedDiff};
+			EControlTimedDiff, EControlTimerProbe, EControlRegProbe, EControlRegWrite, EControlKickLoop};
 	#ifndef __KERNEL_MODE__
 		TInt Open(){return DoCreate(KRunBlobName, TVersion(1,0,0), KNullUnit, NULL, NULL);}
 		TInt Run(TDes8& aBuf){return DoControl(EControlRunBlob, (TAny*)&aBuf);}
@@ -78,6 +84,10 @@ class RRunBlob : public RBusLogicalChannel{
 		// never returns, battery pull to recover. no buffer
 		TInt Takeover(){return DoControl(EControlTakeover, NULL);}
 
+		// ONE-WAY watchdog test: kills symbian (mmu off) and kicks both watchdogs
+		// forever from bare metal. never returns
+		TInt KickLoop(){return DoControl(EControlKickLoop, NULL);}
+
 		// booter: alloc a contiguous boot chunk, stream zImage+dtb in, boot
 		TInt AllocBoot(TUint32 aSize, TUint32& aPhysOut){
 			return DoControl(EControlAllocBoot, (TAny*)&aSize, (TAny*)&aPhysOut);
@@ -103,6 +113,18 @@ class RRunBlob : public RBusLogicalChannel{
 			p.iPhys=aVirt; p.iBytes=aCount; p.iColor=aDelay;
 			return DoControl(EControlTimedDiff, (TAny*)&p, (TAny*)&aBuf);
 		}
+
+		// checks the timers reversed from the firmware (docs/driver-re.md), only
+		// touches regs symbian itself uses: fast counter 0x20033350 (latch 0x354)
+		// and the ms timer 0x200337a4/0x7a8. aBuf gets KTimerProbeWords words
+		TInt TimerProbe(TDes8& aBuf){return DoControl(EControlTimerProbe, (TAny*)&aBuf);}
+
+		// reads one word from each virt address in aAddrs (KRegProbeMax max, only
+		// the c6 peripheral window, others give 0xdeadc6c6). aBuf gets one word each
+		TInt RegProbe(const TDesC8& aAddrs, TDes8& aBuf){return DoControl(EControlRegProbe, (TAny*)&aAddrs, (TAny*)&aBuf);}
+
+		// writes aVal to one virt address in the c6 peripheral window (KErrArgument otherwise)
+		TInt RegWrite(TUint32 aVirt, TUint32 aVal){return DoControl(EControlRegWrite, (TAny*)aVirt, (TAny*)aVal);}
 	#endif
 };
 

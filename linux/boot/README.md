@@ -19,13 +19,33 @@ Chunk layout: zImage @ `+0x8000` (TEXT_OFFSET), DTB @ `+0x02000000`, chunk 48 MB
 The kernel is built with `ARM_PATCH_PHYS_VIRT`, so it takes the patched memory
 base as PHYS_OFFSET.
 
-## Usage (adapter phase)
+## Wiring the console (13.10.2026)
+The console is the **bluetooth uart** (`0x20025a00`, `rapuyama_earlycon`), it has test pads on the N8 board
+(same RapuYama board family as the E6, check the E6 board for the same pads):
+| Pad | Net | Adapter |
+|---|---|---|
+| J6354 | BTUARTIn (SoC tx -> bt chip) | adapter **RX** |
+| J6355 | BTUARTOut (bt chip -> SoC rx) | adapter TX (leave off at first, the bt chip drives it too) |
+| any | GND | GND |
+**1.8 V logic.** A 3.3 V/5 V adapter can kill the pad, use a 1.8 V one or a level shifter.
+115200 8N1. (The old "J6/H6" note was the GPS chip uart balls, not a debug port.)
+
+## Usage
+0. In Symbian **switch bluetooth ON** (keeps the uart block powered, clocked and muxed for earlycon).
 1. Copy `linux/kernel/build/arch/arm/boot/zImage` -> phone `E:\zImage`.
 2. Copy `linux/boot/e6.dtb` -> phone `E:\e6.dtb` (rebuild it from `e6.dts` after changing it).
 3. Install `driver/boot.sis`, run it. It streams both into phys RAM and
    hands off one-way. (`E:\boot.log` records progress up to `about-to-Boot`.)
+4. If it dies: `panic=10` reboots, and if the kernel hangs before the watchdog driver the PMIC watchdog
+   powers the phone off ~48 s after symbian's last kick -> no battery pull needed.
 
-## Blockers to an actually visible boot (found 12.10.2026)
+## Status 13.10.2026
+Drivers reversed from the firmware and in the kernel (`docs/driver-re.md`): intc, ms timer + 32k counter
+(**checked live**), gpio (+ pin irqs), i2c (mainline i2c-omap), pmic/soc watchdog, earlycon on the bt uart.
+The old blockers below are solved except the display.
+
+
+## Old blockers (12.10.2026, mostly solved 13.10)
 1. **Watchdog.** RapuYama has a WDT (firmware strings `CWatchdog`,
    `CWatchdogTimer`, `ShutdownWatchDog`, `mdswatchdog.exe`). With Symbian dead
    nothing kicks it -> hardware reset in ~seconds (that's what killed the

@@ -17,7 +17,8 @@ LDFLAGS  = -nostdlib -T blob.lds
 
 all: blob.bin blob.hdr blob.dis stub2.hdr stub2.dis \
      tramp3.hdr tramp3.dis fakekern.hdr fakekern.dis \
-     takeover.hdr takeover.dis tramp_boot.hdr tramp_boot.dis
+     takeover.hdr takeover.dis tramp_boot.hdr tramp_boot.dis \
+     kickloop.hdr kickloop.dis
 
 blob.o: blob.S
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -144,3 +145,21 @@ clean:
 	      tramp_boot.o tramp_boot.elf tramp_boot.bin tramp_boot.hdr tramp_boot.dis
 
 .PHONY: all clean
+
+# kickloop: one-way, mmu off, kicks both watchdogs forever (watchdog test)
+kickloop.o: kickloop.S
+	$(CC) $(CFLAGS) -c $< -o $@
+kickloop.elf: kickloop.o
+	$(LD) -nostdlib -Ttext 0 --entry kickloop kickloop.o -o $@
+kickloop.bin: kickloop.elf
+	$(OBJCOPY) -O binary $< $@
+	@echo "kickloop size: $$(wc -c < $@) bytes"
+kickloop.dis: kickloop.elf
+	$(OBJDUMP) -d $< > $@
+kickloop.hdr: kickloop.bin
+	@printf '// auto-generated from kickloop.bin -- do not edit\n' > $@
+	@printf 'static const unsigned char KKickLoop[] = {\n' >> $@
+	@od -An -v -tu1 kickloop.bin | sed 's/[0-9][0-9]*/&,/g; s/^/    /' >> $@
+	@printf '};\n' >> $@
+	@printf 'static const unsigned KKickLoopLen = sizeof(KKickLoop);\n' >> $@
+	@echo "wrote $@"

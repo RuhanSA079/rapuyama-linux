@@ -16,6 +16,7 @@
 #include "fakekern.hdr" // KFakeKern[], KFakeKernLen (fake kernel)
 #include "takeover.hdr" // KTakeover[], KTakeoverLen (one-way takeover)
 #include "tramp_boot.hdr" // KTrampBoot[], KTrampBootLen (zImage handoff)
+#include "kickloop.hdr" // KKickLoop[], KKickLoopLen (watchdog test)
 
 typedef TInt (*TStubFn)(TUint32 aMarkerPhys, TUint32 aVal);
 typedef void (*TVoidFn)(void);
@@ -47,6 +48,60 @@ static DPlatChunkHw* IdMapExec(TPhysAddr aP, TUint32& aIdx, TUint32& aOld){
 	CleanDCacheMVA((TLinAddr)&l1[aIdx]);
 	Dsb(); InvTlbAll(); Isb();
 	return cl;
+}
+
+// ONE-WAY: copy a raw blob into its own identity-mapped executable section
+// and jump. the blob kills the mmu itself. never returns on success
+static TInt OneWay(const TUint8* aBlob, TUint aLen){
+	const TInt KSec=0x100000;
+	TPhysAddr p=0;
+	TInt r=Epoc::AllocPhysicalRam(KSec, p, 20);
+	if(r!=KErrNone){return r;}
+	DPlatChunkHw* cw=NULL;
+	r=DPlatChunkHw::New(cw, p, KSec, EMapAttrSupRw|EMapAttrFullyBlocking);
+	if(r!=KErrNone){Epoc::FreePhysicalRam(p, KSec); return r;}
+	volatile TUint8* wb=(volatile TUint8*)cw->LinearAddress();
+	for(TUint i=0; i<aLen; ++i){wb[i]=aBlob[i];}
+
+	TUint32 n=Ttbcr()&0x7;
+	TUint32 l1size=0x4000u>>n;
+	TPhysAddr l1phys=Ttbr0()&~(l1size-1);
+	TUint32 idx=(p>>20);
+	DPlatChunkHw* cl=NULL;
+	r=DPlatChunkHw::New(cl, l1phys, (TInt)l1size, EMapAttrSupRw|EMapAttrCachedMax);
+	if(r!=KErrNone){cw->Close(NULL); Epoc::FreePhysicalRam(p, KSec); return r;}
+	volatile TUint32* l1=(volatile TUint32*)cl->LinearAddress();
+	if(l1[idx]!=0){cl->Close(NULL); cw->Close(NULL); Epoc::FreePhysicalRam(p, KSec); return KErrInUse;}
+	l1[idx]=(p&0xFFF00000u)|(1u<<10)|0x8u|0x4u|0x2u; // normal exec
+	CleanDCacheMVA((TLinAddr)&l1[idx]);
+	Dsb(); InvTlbAll(); Isb();
+	Cache::IMB_Range((TLinAddr)p, aLen);
+
+	TVoidFn fn=(TVoidFn)p;
+	fn(); // never returns
+	return KErrNone; // unreachable
+}
+
+// handoff prep, reversed from the firmware (docs/driver-re.md):
+// clock gates for the bt uart (earlycon) and i2c on, and a fresh kick of both
+// watchdogs so linux starts with the full 48 s. call with irqs off
+static void PrepareHw(){
+	volatile TUint32* r=(volatile TUint32*)0xc6000000u;
+	// clock gates (power_resources table 0x800cbee8, polarity 1 -> write R+4):
+	r[0x330d4/4]=0x1000; // EHwClkBB38M4AnaClk1 (bt uart) = gate 0x22, 0x200330d0 bit 12
+	r[0x330d4/4]=0x40; // EHwClkI2C1 (i2c0.dll) = gate 0x7, 0x200330d0 bit 6
+	r[0x330b4/4]=0x10; // + gate 0x12, 0x200330b0 bit 4
+	r[0x25a04/4]=1; // bt uart active
+	r[0x336c4/4]=0x3fffffffu; // soc watchdog counter
+	// pmic watchdog over cbus: dev 1 reg 0x17 = 48 s (NEVER 0, that powers off)
+	volatile TUint32* cb=(volatile TUint32*)0xc6030700u;
+	cb[0x04/4]=1;
+	cb[0x38/4]=1;
+	cb[0x28/4]=15;
+	cb[0x1c/4]=0x30;
+	cb[0x18/4]=(1<<6)|0x17;
+	for(TInt n=0x10000; n && cb[0x08/4]; --n){}
+	cb[0x04/4]=0;
 }
 
 class DRunBlobChan : public DLogicalChannelBase{
@@ -277,35 +332,9 @@ TInt DRunBlobChan::Request(TInt aFunction, TAny* a1, TAny* a2){
 	}
 
 	// EControlTakeover: ONE-WAY. kill symbian, drive the display
-	if(aFunction==RRunBlob::EControlTakeover){
-		const TInt KSec=0x100000;
-		TPhysAddr p=0;
-		TInt r=Epoc::AllocPhysicalRam(KSec, p, 20);
-		if(r!=KErrNone){return r;}
-		DPlatChunkHw* cw=NULL;
-		r=DPlatChunkHw::New(cw, p, KSec, EMapAttrSupRw|EMapAttrFullyBlocking);
-		if(r!=KErrNone){Epoc::FreePhysicalRam(p, KSec); return r;}
-		volatile TUint8* wb=(volatile TUint8*)cw->LinearAddress();
-		for(TUint i=0; i<KTakeoverLen; ++i){wb[i]=KTakeover[i];}
-
-		TUint32 n=Ttbcr()&0x7;
-		TUint32 l1size=0x4000u>>n;
-		TPhysAddr l1phys=Ttbr0()&~(l1size-1);
-		TUint32 idx=(p>>20);
-		DPlatChunkHw* cl=NULL;
-		r=DPlatChunkHw::New(cl, l1phys, (TInt)l1size, EMapAttrSupRw|EMapAttrCachedMax);
-		if(r!=KErrNone){cw->Close(NULL); Epoc::FreePhysicalRam(p, KSec); return r;}
-		volatile TUint32* l1=(volatile TUint32*)cl->LinearAddress();
-		if(l1[idx]!=0){cl->Close(NULL); cw->Close(NULL); Epoc::FreePhysicalRam(p, KSec); return KErrInUse;}
-		l1[idx]=(p&0xFFF00000u)|(1u<<10)|0x8u|0x4u|0x2u; // normal exec
-		CleanDCacheMVA((TLinAddr)&l1[idx]);
-		Dsb(); InvTlbAll(); Isb();
-		Cache::IMB_Range((TLinAddr)p, KTakeoverLen);
-
-		TVoidFn fn=(TVoidFn)p;
-		fn(); // never returns
-		return KErrNone; // unreachable
-	}
+	if(aFunction==RRunBlob::EControlTakeover){return OneWay(KTakeover, KTakeoverLen);}
+	// EControlKickLoop: ONE-WAY. kill symbian, kick the watchdogs forever
+	if(aFunction==RRunBlob::EControlKickLoop){return OneWay(KKickLoop, KKickLoopLen);}
 
 	// booter: AllocBoot / LoadChunk / Boot
 	if(aFunction==RRunBlob::EControlAllocBoot){
@@ -377,6 +406,11 @@ TInt DRunBlobChan::Request(TInt aFunction, TAny* a1, TAny* a2){
 		if(!cl){sc->Close(NULL); Epoc::FreePhysicalRam(sp, KSec); return KErrGeneral;}
 		Cache::IMB_Range((TLinAddr)sp, KTrampBootLen);
 
+		// last things while the c6 window is still mapped. irqs off so no symbian
+		// code runs after this (the bt stack would gate the uart again)
+		NKern::DisableAllInterrupts();
+		PrepareHw();
+
 		TBootFn fn=(TBootFn)sp;
 		fn((TUint32)iBootPhys+b.iZImageOff, b.iMach, (TUint32)iBootPhys+b.iDtbOff, b.iWdog); // never returns
 		return KErrNone; // unreachable
@@ -400,6 +434,59 @@ TInt DRunBlobChan::Request(TInt aFunction, TAny* a1, TAny* a2){
 		TInt r=Kern::ThreadDesWrite(&Kern::CurrentThread(), a2, src, 0);
 		Kern::Free(ab);
 		return r;
+	}
+
+	// EControlTimerProbe: sanity check of the reversed timers, read only
+	// (+ the fast counter latch, which ekern writes all the time anyway)
+	if(aFunction==RRunBlob::EControlTimerProbe){
+		volatile TUint32* fc=(volatile TUint32*)0xc6033350u; // phys 0x20033350
+		volatile TUint32* mst=(volatile TUint32*)0xc6033780u; // phys 0x20033780
+		TUint32 o[KTimerProbeWords];
+		o[0]=KTimerProbeMagic;
+		TInt irq=NKern::DisableAllInterrupts();
+		o[1]=NKern::TickCount();
+		fc[1]=0xc6033354u; o[2]=fc[0];
+		o[3]=mst[0x24/4]; o[4]=mst[0x28/4];
+		NKern::RestoreInterrupts(irq);
+		for(TInt i=0; i<16; ++i){
+			fc[1]=0xc6033354u; o[5+i*2]=fc[0];
+			o[6+i*2]=mst[0x24/4];
+			Kern::NanoWait(100000); // 100 us
+		}
+		NKern::Sleep(NKern::TimerTicks(1000));
+		irq=NKern::DisableAllInterrupts();
+		o[37]=NKern::TickCount();
+		fc[1]=0xc6033354u; o[38]=fc[0];
+		o[39]=mst[0x24/4]; o[40]=mst[0x28/4];
+		NKern::RestoreInterrupts(irq);
+		TPtrC8 src((const TUint8*)o, (TInt)sizeof(o));
+		return Kern::ThreadDesWrite(&Kern::CurrentThread(), a1, src, 0);
+	}
+
+	// EControlRegProbe: read a list of regs in the c6 window, one word each.
+	// the caller picks regs with no read side effects (no fifos / clear on read)
+	if(aFunction==RRunBlob::EControlRegProbe){
+		TUint32 in[KRegProbeMax];
+		TPtr8 ip((TUint8*)in, 0, sizeof(in));
+		TInt rr=Kern::ThreadDesRead(&Kern::CurrentThread(), a1, ip, 0);
+		if(rr!=KErrNone){return rr;}
+		TInt n=ip.Length()/4;
+		TUint32 o[KRegProbeMax];
+		for(TInt i=0; i<n; ++i){
+			TUint32 v=in[i];
+			if(v>=0xc6000000u && v<0xc7000000u && !(v&3)){o[i]=*(volatile TUint32*)v;}
+			else{o[i]=0xdeadc6c6u;}
+		}
+		TPtrC8 src((const TUint8*)o, n*4);
+		return Kern::ThreadDesWrite(&Kern::CurrentThread(), a2, src, 0);
+	}
+
+	// EControlRegWrite: one write in the c6 window (clock gates etc)
+	if(aFunction==RRunBlob::EControlRegWrite){
+		TUint32 v=(TUint32)a1;
+		if(v<0xc6000000u || v>=0xc7000000u || (v&3)){return KErrArgument;}
+		*(volatile TUint32*)v=(TUint32)a2;
+		return KErrNone;
 	}
 
 	if(aFunction!=RRunBlob::EControlRunBlob){return KErrNotSupported;}
