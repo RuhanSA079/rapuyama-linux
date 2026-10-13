@@ -30,16 +30,17 @@ kickloop:
 kick:
         str     r5, [r4] @ soc counter reload, like power.dll
 
-        @ pmic dev 1 reg 0x17 = 0x30 (48 s), karap 0x800b8494 order
+        @ pmic dev 1 reg 0x17 = 0x30 (48 s), karap 0x800b8494 order and offsets
+        @ (its base ptr is 0x20030704, the first version was 4 bytes off)
         mov     r0, #1
         str     r0, [r6, #0x04] @ enable
-        str     r0, [r6, #0x38] @ write mode
+        str     r0, [r6, #0x3c] @ write mode
         mov     r0, #15
-        str     r0, [r6, #0x28] @ 16 bits
+        str     r0, [r6, #0x2c] @ 16 bits
         mov     r0, #0x30
-        str     r0, [r6, #0x1c] @ data
+        str     r0, [r6, #0x20] @ data
         mov     r0, #0x57 @ (1 << 6) | 0x17
-        str     r0, [r6, #0x18] @ go
+        str     r0, [r6, #0x1c] @ go (write cmd)
         ldr     r1, =0x10000 @ bounded busy wait
 busy:
         ldr     r0, [r6, #0x08]

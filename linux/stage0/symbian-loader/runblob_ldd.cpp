@@ -95,11 +95,13 @@ static void PrepareHw(){
 	r[0x336c4/4]=0x3fffffffu; // soc watchdog counter
 	// pmic watchdog over cbus: dev 1 reg 0x17 = 48 s (NEVER 0, that powers off)
 	volatile TUint32* cb=(volatile TUint32*)0xc6030700u;
+	// offsets from karap 0x800b8494 (base ptr 0x20030704 there): en 04 busy 08
+	// wr mode 3c bits 2c data 20 wr cmd 1c
 	cb[0x04/4]=1;
-	cb[0x38/4]=1;
-	cb[0x28/4]=15;
-	cb[0x1c/4]=0x30;
-	cb[0x18/4]=(1<<6)|0x17;
+	cb[0x3c/4]=1;
+	cb[0x2c/4]=15;
+	cb[0x20/4]=0x30;
+	cb[0x1c/4]=(1<<6)|0x17;
 	for(TInt n=0x10000; n && cb[0x08/4]; --n){}
 	cb[0x04/4]=0;
 }
@@ -487,6 +489,38 @@ TInt DRunBlobChan::Request(TInt aFunction, TAny* a1, TAny* a2){
 		if(v<0xc6000000u || v>=0xc7000000u || (v&3)){return KErrArgument;}
 		*(volatile TUint32*)v=(TUint32)a2;
 		return KErrNone;
+	}
+
+	// EControlReadPhys: map physical RAM at a1 (page aligned) and copy it to the
+	// user descriptor a2. used to read back the ramoops kernel log after a warm
+	// watchdog reset (phys 0x1f000000), so a hung linux leaves a readable log
+	if(aFunction==RRunBlob::EControlReadPhys){
+		TUint32 phys=(TUint32)a1;
+		TInt maxlen=Kern::ThreadGetDesMaxLength(&Kern::CurrentThread(), a2);
+		if(maxlen<=0){return KErrArgument;}
+		TUint32 len=(TUint32)maxlen;
+		TUint32 pageoff=phys&0xfff;
+		TUint32 base=phys&~0xfffu;
+		TUint32 msize=(pageoff+len+0xfff)&~0xfffu;
+		DPlatChunkHw* c=NULL;
+		TInt r=DPlatChunkHw::New(c, base, (TInt)msize, EMapAttrSupRw|EMapAttrCachedMax);
+		if(r!=KErrNone){return r;}
+		const TUint8* src=(const TUint8*)(c->LinearAddress()+pageoff);
+		// copy through a kernel staging buffer in chunks
+		TUint8* stage=(TUint8*)Kern::Alloc(0x1000);
+		if(!stage){c->Close(NULL); return KErrNoMemory;}
+		TUint32 done=0;
+		while(done<len){
+			TUint32 n=len-done; if(n>0x1000){n=0x1000;}
+			for(TUint32 i=0; i<n; ++i){stage[i]=src[done+i];}
+			TPtrC8 p8(stage, (TInt)n);
+			r=Kern::ThreadDesWrite(&Kern::CurrentThread(), a2, p8, (TInt)done);
+			if(r!=KErrNone){break;}
+			done+=n;
+		}
+		Kern::Free(stage);
+		c->Close(NULL);
+		return r;
 	}
 
 	if(aFunction!=RRunBlob::EControlRunBlob){return KErrNotSupported;}

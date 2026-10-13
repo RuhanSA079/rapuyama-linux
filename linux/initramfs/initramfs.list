@@ -1,3 +1,11 @@
 dir /dev 755 0 0
 nod /dev/console 600 0 0 c 5 1
-file /init /home/fluffles/Documents/Coding/other-projects/e6-linux/linux/initramfs/init 755 0 0
+dir /bin 755 0 0
+dir /sbin 755 0 0
+dir /proc 755 0 0
+dir /sys 755 0 0
+dir /tmp 1777 0 0
+file /bin/busybox /home/fluffles/Documents/Coding/other-projects/e6-linux/work/dl/busybox-armv5l 755 0 0
+slink /bin/sh busybox 777 0 0
+file /init /home/fluffles/Documents/Coding/other-projects/e6-linux/linux/initramfs/init.sh 755 0 0
+file /sbin/init /home/fluffles/Documents/Coding/other-projects/e6-linux/linux/initramfs/init 755 0 0

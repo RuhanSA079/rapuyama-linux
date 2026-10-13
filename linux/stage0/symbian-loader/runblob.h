@@ -46,7 +46,7 @@ class RRunBlob : public RBusLogicalChannel{
 		enum TControl{EControlRunBlob, EControlIdentityTest, EControlTrampTest,
 			EControlFullTramp, EControlFbFill, EControlTakeover,
 			EControlAllocBoot, EControlLoadChunk, EControlBoot,
-			EControlTimedDiff, EControlTimerProbe, EControlRegProbe, EControlRegWrite, EControlKickLoop};
+			EControlTimedDiff, EControlTimerProbe, EControlRegProbe, EControlRegWrite, EControlKickLoop, EControlReadPhys};
 	#ifndef __KERNEL_MODE__
 		TInt Open(){return DoCreate(KRunBlobName, TVersion(1,0,0), KNullUnit, NULL, NULL);}
 		TInt Run(TDes8& aBuf){return DoControl(EControlRunBlob, (TAny*)&aBuf);}
@@ -125,6 +125,9 @@ class RRunBlob : public RBusLogicalChannel{
 
 		// writes aVal to one virt address in the c6 peripheral window (KErrArgument otherwise)
 		TInt RegWrite(TUint32 aVirt, TUint32 aVal){return DoControl(EControlRegWrite, (TAny*)aVirt, (TAny*)aVal);}
+
+		// maps physical RAM at aPhys (page aligned) and copies aBuf.MaxLength() bytes into aBuf
+		TInt ReadPhys(TUint32 aPhys, TDes8& aBuf){return DoControl(EControlReadPhys, (TAny*)aPhys, (TAny*)&aBuf);}
 	#endif
 };
 

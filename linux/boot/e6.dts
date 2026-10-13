@@ -21,7 +21,7 @@
 		 * / J6355 (our rx), 1.8 V! switch bluetooth on in symbian first so
 		 * the block is powered/clocked/muxed. panic=10 + the pmic watchdog
 		 * bring the phone back to symbian if it dies */
-		bootargs = "earlycon keep_bootcon console=ttyNULL panic=10";
+		bootargs = "earlycon=ramcon,0x1f000000 keep_bootcon console=ttyNULL panic=10";
 		stdout-path = &uart_bt;
 	};
 
@@ -43,6 +43,26 @@
 	memory@10000000 {
 		device_type = "memory";
 		reg = <0x10000000 0x10000000>;
+	};
+
+	/* RAM earlycon buffer (earlycon=ramcon,0x1f000000). linux writes all printk
+	 * here from the very start of setup_arch; survives the warm watchdog reset;
+	 * driver/ramread.sis reads it back. reserved so the allocator keeps off it */
+	reserved-memory {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		ramcon@1f000000 {
+			reg = <0x1f000000 0x100000>;
+			no-map;
+		};
+	};
+
+	/* ULPI phy inside the Gazoo asic, symbian leaves it set up */
+	usb_phy: usb-phy {
+		compatible = "usb-nop-xceiv";
+		#phy-cells = <0>;
 	};
 
 	clocks {
@@ -76,7 +96,8 @@
 		/* karap irq/fiq dispatchers + Interrupt:: code, 421 lines */
 		intc: interrupt-controller@20400000 {
 			compatible = "nokia,rapuyama-intc";
-			reg = <0x20400000 0x4000>;
+			/* main bank + the 5 gpio/periph secondary banks (0x20033400) */
+			reg = <0x20400000 0x4000>, <0x20033400 0x140>;
 			interrupt-controller;
 			#interrupt-cells = <1>;
 		};
@@ -103,6 +124,48 @@
 			#clock-cells = <1>;
 		};
 
+		/* usb.dll: Mentor MUSB + TI OMAP2430 style otg wrapper at +0x400,
+		 * ULPI phy in the Gazoo asic (left as symbian set it up). irq 183 =
+		 * core, 215 = dma. off by default, e6-usb.dts turns it on */
+		usb_otg: usb@20038800 {
+			compatible = "nokia,rapuyama-musb";
+			reg = <0x20038800 0x500>;
+			interrupts = <183>, <215>;
+			interrupt-names = "mc", "dma";
+			/* EHwClkDomHSUSB (power domain + gates), EHwClkHSUSB */
+			clocks = <&cgc 0x0e>, <&cgc 0x0f>;
+			phys = <&usb_phy>;
+			dr_mode = "peripheral";
+			status = "disabled";
+		};
+
+		/* EPBUSMV.DLL: two TI OMAP1/2420 style mmc controllers, tables at
+		 * 0x80164558 (base 0/0x100), 0x80164568 (irq 0xad/0xab), 0x80164578
+		 * (power resource 0x23/0x24 = direct gates). N8 schematic: microSD
+		 * on MMC2. fclk rate unknown (gates hang off the 24 mhz i2c clock
+		 * here), so max-frequency is kept low. off until tested */
+		mmc1: mmc@20032800 {
+			compatible = "ti,omap2420-mmc";
+			reg = <0x20032800 0x80>;
+			interrupts = <173>;
+			clocks = <&cgc 0x23>, <&cgc 0x23>;
+			clock-names = "ick", "fck";
+			bus-width = <4>;
+			max-frequency = <6000000>;
+			status = "disabled";
+		};
+
+		mmc2: mmc@20032900 {
+			compatible = "ti,omap2420-mmc";
+			reg = <0x20032900 0x80>;
+			interrupts = <171>;
+			clocks = <&cgc 0x24>, <&cgc 0x24>;
+			clock-names = "ick", "fck";
+			bus-width = <4>;
+			max-frequency = <6000000>;
+			status = "disabled";
+		};
+
 		/* bc02_uart1.PDD, the uart to the bluetooth chip (earlycon only) */
 		uart_bt: serial@20025a00 {
 			compatible = "nokia,rapuyama-uart";
@@ -113,10 +176,10 @@
 		};
 
 		/* pmic watchdog over the cbus master + soc counter, symbian left both
-		 * running, ~48 s after the last kick the phone powers off */
+		 * running. 3rd reg = soc reset (rebootdriver.ldd: write 2) */
 		watchdog@20030700 {
 			compatible = "nokia,rapuyama-wdt";
-			reg = <0x20030700 0x40>, <0x200336c4 0x4>;
+			reg = <0x20030700 0x40>, <0x200336c4 0x4>, <0x20033114 0x4>;
 		};
 
 		/* i2c0.dll: same regs, bits and scl formula as the TI OMAP i2c

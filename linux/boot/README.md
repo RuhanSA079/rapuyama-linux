@@ -39,6 +39,17 @@ The console is the **bluetooth uart** (`0x20025a00`, `rapuyama_earlycon`), it ha
 4. If it dies: `panic=10` reboots, and if the kernel hangs before the watchdog driver the PMIC watchdog
    powers the phone off ~48 s after symbian's last kick -> no battery pull needed.
 
+## Test ladder without a uart adapter (13.10.2026)
+Files in `out/`: `zImage` (busybox initramfs), `e6.dtb`, `e6-usb.dtb`, `boot.sis`, `kickloop.sis`.
+| step | phone | what it tells |
+|---|---|---|
+| `kickloop.sis` | stays alive (frozen) | the watchdog kicks are right (**done 13.10, alive**) |
+| `boot.sis` + `e6.dtb` | **clean power off ~30 s** after the jump | kernel + timer + irqs + scheduler + busybox `/init` work |
+| | clean power off ~60 s | busybox didn't run, the asm `/sbin/init` fallback did |
+| | black screen (backlight on) + reboot ~13 s | died before the watchdog driver (soc watchdog reset) |
+| | frozen for ever | kernel alive, init stuck / power off failed |
+| `boot.sis` + `e6-usb.dtb` renamed to `E:\e6.dtb`, usb cable plugged, bt on | a new usb serial device on the pc (`dmesg`, `/dev/ttyACM0`) | usb gadget works -> `screen /dev/ttyACM0 115200` = busybox shell + kernel log |
+
 ## Status 13.10.2026
 Drivers reversed from the firmware and in the kernel (`docs/driver-re.md`): intc, ms timer + 32k counter
 (**checked live**), gpio (+ pin irqs), i2c (mainline i2c-omap), pmic/soc watchdog, earlycon on the bt uart.

@@ -19,7 +19,11 @@ public class ghidra_kern_setup extends GhidraScript{
 		if(mem.getBlock(sp.getAddress(0xc8000000L))==null){mem.createUninitializedBlock("KDATA", sp.getAddress(0xc8000000L), 0x02200000L, false);}
 		Register tmode=currentProgram.getProgramContext().getRegister("TMode");
 		// arm everywhere before anything gets disassembled
-		currentProgram.getProgramContext().setValue(tmode, sp.getAddress(0x80000000L), mem.getBlock(sp.getAddress(0x80000000L)).getEnd(), BigInteger.ZERO);
+		MemoryBlock rom=mem.getBlocks()[0]; // the loaded blob, whatever its base
+		for(MemoryBlock mb : mem.getBlocks()){
+			if(mb.isInitialized()){rom=mb; break;}
+		}
+		currentProgram.getProgramContext().setValue(tmode, rom.getStart(), rom.getEnd(), BigInteger.ZERO);
 		String mods=getScriptArgs()[0];
 		BufferedReader br=new BufferedReader(new FileReader(mods));
 		String l;
