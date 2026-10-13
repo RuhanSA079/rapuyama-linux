@@ -2,7 +2,8 @@
 // to the kernel (one-way). needs E:\zImage and E:\e6.dtb on the phone
 //
 // chunk layout: zImage @ +0x00008000 (TEXT_OFFSET), dtb @ +0x02000000.
-// the booter patches the dtb /memory base to the chunk phys base.
+// The E6 kernel has fixed PHYS_OFFSET=0x10000000; the DTB describes the
+// same RAM range. The legacy sentinel patch in the driver does not match it.
 // after Boot() the kernel takes over and this never returns (battery pull to
 // recover). until there are rapuyama drivers + watchdog handling this wont
 // boot visibly, its just the loader ready for when the adapter shows up

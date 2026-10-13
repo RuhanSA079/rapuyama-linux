@@ -56,13 +56,16 @@ From the karap IRQ/FIQ dispatchers (`0x800b7c88` = `Arm::SetIrqHandler` target, 
 
 - 421 lines (`0..0x1a4`), handler table at kernel data `0xc8003340` (8 bytes each).
 - init: enable=1, `+0x1c`=0, disable all, `+0x84`=5, drain `+0x08` until `-1`, same for fiq,
-  then 5 secondary banks in the clock/power block at `0x20033414 + 0x40*k` get the same disable+drain.
+  then 5 secondary banks in the clock/power block at `0x20033414 + 0x40*k` get disabled at `+0x14`
+  and drained by reading their pending-number register at `+0x3c` until `-1`.
 - irq loop: `n = rd(+0x08); if n!=-1 -> handler[n]; repeat`, when none `rd(+0x80)`.
+  Linux defers per-line unmask operations requested during dispatch until after this final EOI read, preserving the firmware timer ISR's EOI-before-reenable order and preventing an asserted level from being requeued before EOI.
 
 ## Timers
 - **ms tick** (`BindMsTick`) = **IRQ 242**, timer at `0x200337a0`:
   start = `wr(0x200337a4, 0x9600)` + enable 242, isr = disable 242, `wr(0x200337a8, 0x9600)`, `NTimerQ::Tick`, `rd(0x20400080)`, enable 242.
   `0x9600` = 38400 -> 1 ms at 38.4 MHz.
+  Linux keeps this confirmed 1 ms hardware period and divides the IRQs to `HZ`; programming `rate / HZ` at `HZ=100` would request 384000 counts, beyond the only period verified on hardware and possibly beyond the counter width.
 - **free running counter** (`NKern::FastCounter`, ekern `0x8005c41c`): write anything to `0x20033354` (latch), read `0x20033350`. Frequency not pinned yet. -> Linux clocksource.
 
 ## Clocks
@@ -216,8 +219,8 @@ Decompiled every remaining kernel-side module except the camera (dcam*, Ghidra h
 - ssc / khbridge / dataserviceapi = sw clients on ISA / VCHI.
 So the peripheral reverse is **complete** for what's directly drivable from the ARM side: intc, timers, gpio(+irq), i2c, watchdog, clocks, usb/musb, uart, reboot, sd/mmc. The display (VideoCore) and modem (ISA) are protocol stacks, each a separate future project, both needing the live phone.
 
-## INTC irq storm fix (13.10, phone test: stop3 pass / stop4 fail = died at local_irq_enable)
-`FUN_800b8b18` (firmware "disable all") masks not just the main+fiq banks but **5 secondary gpio/peripheral banks** at `0x20033400 + 0x40*k` (write `~0` to `+0x14`, drain `+0x28` until -1). My intc init skipped them, so a source symbian left enabled stormed the main line the instant linux enabled interrupts -> hang -> 12 s watchdog reset. Fixed: intc node now has a 2nd reg `<0x20033400 0x140>`, init masks+drains all 5 banks. `drivers/irqchip/irq-rapuyama.c`.
+## INTC initialization and dispatch safeguards (13.10)
+`FUN_800b8b18` (firmware "disable all") masks not just the main+fiq banks but **5 secondary gpio/peripheral banks** at `0x20033400 + 0x40*k` (write `~0` to `+0x14`, drain the pending-number register at `+0x3c` until -1). The secondary banks are masked and drained during Linux INTC initialization. The Linux handler reads the main controller's end-of-interrupt register once after draining pending IRQs, matching the firmware dispatcher. It masks unmapped lines, bounds the dispatch loop, and masks all IRQs if hardware reports an out-of-range line. These safeguards prevent an unhandled or malformed pending queue from trapping the CPU in the handler; they do **not** establish that such a queue caused the observed boot hang. `drivers/irqchip/irq-rapuyama.c`.
 
 ## IRQ / reg audit (13.10, vs firmware Interrupt::Bind)
 Cross-checked every DTS irq against the firmware bind sites (`Interrupt::Bind` = `0x800b89b0`, first arg = line number). All confirmed, no collisions, all < 421 (max line 420):

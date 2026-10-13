@@ -25,7 +25,13 @@ On entry to `zImage`/the kernel:
    - allocate a big physically contiguous block through the kernel API
      (`Epoc::AllocPhysicalRam` / `TRamDefragRequest`), remember the phys base;
    - or a "hard" top chunk of the 256 MB if Symbian doesn't touch it (risky).
-   zImage goes to phys `RAM_base + TEXT_OFFSET` (usually `0x8000`), DTB above it.
+   The current loader puts zImage at chunk phys `+ TEXT_OFFSET` (`0x8000`) and
+   the DTB at chunk `+0x02000000`. The E6 kernel uses fixed
+   `PHYS_OFFSET=0x10000000` (and `ARM_PATCH_PHYS_VIRT`), so the decompressor
+   puts the kernel at `0x10008000` regardless of the allocated chunk address.
+   Do not enable `AUTO_ZRELADDR`: with that heuristic, a chunk at
+   `0x18000000` makes Linux infer `PHYS_OFFSET=0x18000000` and omit the lower
+   128 MiB from its memory map.
 2. **Copy** zImage and DTB into the reserved phys pages (through temporary
    virt mappings), sync the cache (`Cache::IMB_Range` / clean+invalidate).
 3. **Point of no return (MMU off).** Can't run C with the MMU off in virt space,

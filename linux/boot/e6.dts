@@ -5,8 +5,8 @@
  * peripheral addresses + register layouts are reversed from the firmware
  * drivers (karap/ekern/power.dll), see docs/driver-re.md. ram ends at
  * 0x20000000, everything from there up is mmio, NOT reserved dram like i thought
- * before. the /memory base is a sentinel the booter patches to the allocated
- * chunk phys base (ARM_PATCH_PHYS_VIRT)
+ * before. The booter leaves this fixed RAM range unchanged; the kernel is
+ * configured with PHYS_OFFSET=0x10000000 to match it.
  */
 
 / {
@@ -35,11 +35,9 @@
 		};
 	};
 
-	/* all 256 mb: symbian is dead after the jump, and with AUTO_ZRELADDR the
-	 * zImage puts the kernel at (its addr & 0xf8000000) + 0x8000 = 0x10008000,
-	 * which has to be inside /memory. the dtb sits at chunk + 32 mb, always
-	 * >= 0x12000000, above the kernel. (no sentinel any more, so the booter
-	 * leaves this alone) */
+	/* all 256 mb: symbian is dead after the jump. The kernel is linked with
+	 * PHYS_OFFSET=0x10000000 and the decompressor writes the Image at
+	 * 0x10008000, regardless of where the booter allocated the source chunk. */
 	memory@10000000 {
 		device_type = "memory";
 		reg = <0x10000000 0x10000000>;
