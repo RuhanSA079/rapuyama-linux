@@ -1,6 +1,6 @@
 /* e6.dts + the usb gadget (g_serial, console on ttyGS0 -> ttyACM0 on the pc).
  * boot with the usb cable plugged in so symbian has the usb block powered */
-#include "e6.dts"
+/include/ "e6.dts"
 
 &usb_otg {
 	status = "okay";
@@ -8,6 +8,6 @@
 
 / {
 	chosen {
-		bootargs = "earlycon=ramcon,0x1f000000 keep_bootcon console=ttyGS0,115200 console=ttyNULL panic=10 e6.usbsh";
+		bootargs = "earlycon=ramcon,0x1f000000 keep_bootcon console=ttyGS0,115200 panic=10 nohlt e6.usbsh";
 	};
 };

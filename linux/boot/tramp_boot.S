@@ -39,6 +39,11 @@ tramp_boot:
         mcr     p15, 0, r2, c7, c5, 4 @ ISB
         mrc     p15, 0, r3, c1, c0, 0
         bic     r3, r3, #0x5 @ clear M (mmu) + C (D cache)
+        @ symbian leaves SCTLR.FA (bit 29, AP[0] = access flag) set. linux v6
+        @ doesn't clear it, so its user-RO ptes (AP0=0, incl. the 0xffff0000
+        @ vectors page) give access-flag faults -> the first irq recurses in
+        @ the abort vector forever. also clear TR (bit 28, tex remap)
+        bic     r3, r3, #0x30000000
         mcr     p15, 0, r3, c1, c0, 0 @ MMU OFF
         mcr     p15, 0, r3, c7, c5, 4 @ ISB
 

@@ -21,7 +21,7 @@
 		 * / J6355 (our rx), 1.8 V! switch bluetooth on in symbian first so
 		 * the block is powered/clocked/muxed. panic=10 + the pmic watchdog
 		 * bring the phone back to symbian if it dies */
-		bootargs = "earlycon=ramcon,0x1f000000 keep_bootcon console=ttyNULL panic=10";
+		bootargs = "earlycon=ramcon,0x1f000000 keep_bootcon console=ttyNULL panic=10 initcall_debug ignore_loglevel nohlt";
 		stdout-path = &uart_bt;
 	};
 
