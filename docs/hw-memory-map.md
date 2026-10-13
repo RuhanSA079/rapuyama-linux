@@ -29,17 +29,21 @@ From the firmware MMU peripheral mapping table (core-bin file `0x13c2f9c`, ROM v
 |---|---|---|---|
 | `c6018000` | **`0x30000000`** | 16K | sys/clock controller: indexed regs + pointer table + a LUT. **watchdog suspect** |
 | `c6050000` | `0x40000000` | 4K | NOT hardware: kernel debug trace buffer in ram (`Kern::Printf` lands here) |
-| `c6f00000` | **`0x40100000`** | 1M | peripheral bank, reads all `FF` with symbian up (gated?). **uart/intc/timer probably here** |
+| `c6f00000` | **`0x40100000`** | 1M | XTI trace port (xtitx/xtiwriter), write-only, reads `FF` |
 | `c6070000` | `0xfffd0000` | 64K | exception vectors + thumb handler code |
 | `c6011000` | `0x08000000` | 4K | external memory bank config (CS0) |
 | `c6010000` | `0x09000000` | 4K | external memory bank config (CS1), almost the same as CS0 |
-| `c6012000`, `c6020000`, `c6060000`, `c6e00000`, `c60a0000`, `c60af000`, `c60a1000` | `0x20010000`, `0x20020000`, `0x20400000`, `0x20500000`, `0x20600000`, `0x20680000`, `0x20700000` | - | top of dram, VideoCore/codec/framebuffer reserve (not mmio) |
+| `c6020000` | **`0x20020000`** | 192K | **SoC peripheral bus** (spi, uart, dma, gpio, i2c, clock/power, usb), see `driver-re.md` |
+| `c6060000` | **`0x20400000`** | 16K | **interrupt controller** |
+| `c6012000`, `c60a0000`, `c60af000`, `c60a1000` | `0x20010000`, `0x20600000`, `0x20680000`, `0x20700000` | - | more mmio (NOT dram - ram ends at `0x20000000`) |
 
 Also seen live: virt `0x91d30000`/`0x91adc000` -> phys `0x30000000` (1 page, second mapping of sysctrl).
 Low bytes in the firmware table (`0x101/0x901/0x308/0x503...`) = size/attributes. The
 table also has ROM pointers (`0x80003010`, `0x80003190`) -> page sub-tables `{off,0x11000}`.
 
 ## About `0xE0xxxxxx` (uart `0xe0410000` etc)
+**WRONG, see `driver-re.md` (13.10.2026)**: these are arm opcodes picked up by a raw word scan, and `0x8005ca30` is `BTrace::OutFiltered`. Kept below for history.
+
 These are not addresses but **HAL-encoded register ids** in driver config tables
 (`bc02_uart1.PDD` etc), passed to the ekern register access helper `0x8005ca30`.
 All 9 candidates probed live are UNMAPPED. The helper takes block = `(halID >> 16) & 0xff`
