@@ -60,6 +60,23 @@ if grep -q e6.usbsh /proc/cmdline; then
 	done
 	log "usb configured, shell on ttyGS0"
 
+	if grep -q e6.fbtest /proc/cmdline; then
+		n=0
+		while [ ! -c /dev/fb0 ] && [ "$n" -lt 10 ]; do
+			n=$((n + 1))
+			sleep 1
+		done
+		if [ -c /dev/fb0 ]; then
+			if /usr/bin/fbtest > /dev/kmsg 2>&1; then
+				log "framebuffer test pattern written"
+			else
+				log "framebuffer test pattern failed"
+			fi
+		else
+			log "framebuffer test requested but /dev/fb0 is missing"
+		fi
+	fi
+
 	# getty makes ttyGS0 the controlling tty, so ctrl-c and job control work.
 	# respawn: closing the terminal on the pc just gives a fresh shell
 	while true; do

@@ -75,14 +75,22 @@ and the public Symbian sources only have reference baseports (beagleboard, navie
   `DPlatChunkHw` with `EMapAttrSupRwx`.
 
 ## Display (GPU)
-E6 display = **Broadcom BCM2727 (VideoCore IV, same family as the raspberry pi)**,
+E6 display = **Broadcom BCM2727B1 (VideoCore III)**,
 driven via DISPMANX over VCHI on MPHI/CCP2 (`vcdispman*`, `vcdispmanvchi.dll`,
 `dispcommanddrv.dll`, `display_chipset_drv_ive_bc.dll`). The VideoCore firmware is
 inside the Nokia core-bin and runs on its own. The framebuffer is at phys
 **`0x10480000`** (fill test flashed the screen while symbian was alive). The panel is
 command-mode: once symbian is dead nobody triggers frames, so writing the fb
-shows nothing. Drawing from linux = a minimal VCHI/dispmanx client (RPi VCHIQ is
-open source and can be the reference). Separate project, not needed for bring-up.
+shows nothing (`Takeover` confirmed that it does not refresh after the handoff).
+Drawing from Linux requires a working VCHI/DispmanX client. Raspberry Pi VCHI
+sources are useful protocol references, but its VCHIQ hardware backend is not
+compatible with RapuYama's MeSSI/CCP2 transport.
+
+Do not expose the current framebuffer as `simplefb`: the uncompressed kernel
+image loads at `0x10008000` and is 19,643,844 bytes, covering
+`0x10008000..0x112c3dc4` and overwriting the entire framebuffer range
+`0x10480000..0x10880000`. The panel also needs a VideoCore update request;
+preserving or mapping the framebuffer alone would not refresh it after handoff.
 
 ## Watchdog
 Exists (`CWatchdog`, `CWatchdogTimer`, `ShutdownWatchDog`, `mdswatchdog.exe`), resets

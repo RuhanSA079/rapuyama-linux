@@ -1,0 +1,27 @@
+/* Diagnostic image: keep the existing VideoCore framebuffer outside Linux RAM. */
+/include/ "e6-usb.dts"
+
+/ {
+	chosen {
+		bootargs = "earlycon=ramcon,0x1f000000 keep_bootcon console=ttyGS0,115200 panic=10 nohlt e6.usbsh e6.fbtest";
+	};
+};
+
+/ {
+	reserved-memory {
+		display_fb: framebuffer@10480000 {
+			reg = <0x10480000 0x00400000>;
+			no-map;
+		};
+	};
+
+	rapuyama_fb {
+		compatible = "nokia,rapuyama-fbmem";
+		memory-region = <&display_fb>;
+		width = <640>;
+		height = <480>;
+		stride = <2560>;
+		bits-per-pixel = <32>;
+		status = "okay";
+	};
+};

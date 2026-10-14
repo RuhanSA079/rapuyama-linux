@@ -187,13 +187,16 @@ Live check: `driver/regprobe.sis` -> `E:\regprobe.bin` -> `tools/parse_regprobe.
 - so rootfs = initramfs (busybox) for now.
 
 ## VideoCore link (vcdriver.dll, `0x80328170`)
-- display = Broadcom BCM2727 VideoCore IV. the ARM **boots it**: `DVCDriver::Boot()` talks to the VC boot ROM in 2 stages and sends the VC image (`unsigned_2727b1.dll`, 1 MB in rom, "VideoCore image ID").
+- display = Broadcom BCM2727B1 VideoCore III. the ARM **boots it**: `DVCDriver::Boot()` talks to the VC boot ROM in 2 stages and sends the VC image (`unsigned_2727b1.dll`, 1 MB in rom, "VideoCore image ID").
 - message link = **MeSSI** (an SSI block used for VC messages, `DVCMessiTx/RxChannel`, `TControllerMessi`), regs `0x20024800..0x20024880` and `0x20025800..0x20025864` (same reg pattern family as the bt uart at `0x20025a00`).
 - bulk VC -> ARM data over **CCP2 rx** (`DVCCcpRxChannel`, `DIspCcp`, camera port), plus gpio handshake pins **HAT** (irq) and **RUN**, a torch enable pin, regulators Vaux/Vout/Vio.
 - also uses `0x200318e0..0x200319e8` (gpio/mux), `0x20033008/038/178` (clocks), `0x20034000..240`.
 - decompiled (13.10, `work/ghidra/kern2/ann/`, xref `work/reg_xref2.txt`): MeSSI A `0x20024810..0x20024880` (fns `0x8032a154` init, `0x80329c8c/9e24/9db4/9ec8` tx/rx/irq), MeSSI B `0x20025810..0x20025864` (`0x8032a368` init, `0x8032a6b4/a81c/a98c/acc4`), pin mux `0x200318e0/f0/900` + gpio `0x200319e4/e8` (HAT/RUN/torch), clocks `0x20033008/038/178`, CCP2/ISP rx `0x20034000/200/240`.
+- More detail: `FUN_8032a3c8` sets up channel-related state for IDs `0x7e`, `0x7d`, `0x7c`, `0x6a..0x79`, then installs callbacks/semaphore; MeSSI B init is followed by MeSSI A init, which binds IRQ `0x92`. The A-block callback reads/acks `0x20024818`, handles FIFO status and logs underflow/sync-loss bits. `FUN_8032cd50` performs several request/response and image-transfer steps, including a later descriptor at image offset `0x1c`; exact wire schemas remain unknown. Expanded evidence: [`videocore-display.md`](videocore-display.md).
 - XTI trace port (xtitx/xtirx): `0x40103880`, `0x40103ec0`, `0x401e0000`, `0x401e1000`, `0x401fd000` + `0x20032784/7b0`. needs nokia's trace hardware, not a console option for us.
-- linux display = boot/keep the VC + MeSSI driver + VCHI/dispmanx. big project, rpi's open vchiq is the protocol reference. not started.
+- ROM analysis shows the boot request/response and image-transfer path in `vcdriver.dll`, while VCHI handles MeSSI/CCP2 traffic and the display-management modules sit above it. Exact framing, service commands, and Linux transport compatibility are still open. See [`videocore-display.md`](videocore-display.md).
+- The kernel already includes the generic BCM2835 VCHIQ stack, but its DT binding expects a Broadcom doorbell pair. Do not assume it is compatible with RapuYama's MeSSI/CCP2 transport.
+- Linux display driver not implemented. A disabled-by-default, no-MMIO platform-driver scaffold exists under `linux/kernel/linux/drivers/soc/rapuyama/`; it has no DTS node and its probe explicitly reports unsupported operation.
 
 ## Modem link (ISA)
 - clocks like MemCard/GDMA go through the modem: power_resources -> sisa_wrapper `0x8010365c` -> a function pointer registered at run time (`c800a6e0`), isaaccessextension = phonet style pipes/PEP (`DPepTransceiver`, `MIST2IADApi`), like the N900 ISI stack.

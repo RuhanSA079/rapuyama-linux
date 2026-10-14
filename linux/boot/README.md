@@ -42,6 +42,28 @@ The BusyBox shell runs on the phone's `ttyGS0`. This is an interactive userspace
 
 The base `e6.dtb` selects a non-interactive init path that logs a sign of life and reboots after 30 seconds. The USB DTB selects the persistent shell path. If the gadget does not appear or the host does not enumerate it, init logs the failure and reboots so the RAM log can be retrieved.
 
+## Framebuffer-preserving kernel experiment
+
+The current `Image` is loaded at `0x10008000` and overwrites the framebuffer at
+`0x10480000..0x10880000`. A separate diagnostic zImage can be built with
+`PHYS_OFFSET=0x10880000`, moving the decompressed kernel start to
+`0x10888000` while leaving the standard `e6.config` and `build/` output
+untouched:
+
+```sh
+./linux/kernel/build-display-test.sh
+```
+
+The script places the image at
+`linux/kernel/build-display/arch/arm/boot/zImage`, copies the USB-shell DTB,
+and builds `linux/kernel/build-display/e6-display-test.dtb`. The latter
+reserves the 4 MiB buffer and enables `/dev/fb0` through the diagnostic
+`rapuyama-fbmem` driver. On this diagnostic boot only, initramfs writes an
+eight-bar color pattern to `/dev/fb0` and logs whether that write succeeded.
+This verifies Linux's framebuffer mapping and provides a visible test if the
+panel happens to refresh, but it does not send VideoCore update commands and
+does not guarantee a change on the E6's command-mode panel.
+
 ## IRQ vector probe
 
 To test whether the CPU reaches the ARM IRQ vector before the normal IRQ stack save, copy `e6-irqvector-probe-zImage` to `E:\zImage` and `e6-irqvector-probe.dtb` to `E:\e6.dtb`. This diagnostic image sends the existing PMIC power-off command from the IRQ vector itself. An immediate
@@ -52,4 +74,5 @@ The successful boot log is preserved at
 [`../../docs/first-boot_SUCCESS.log`](../../docs/first-boot_SUCCESS.log). It shows the timer interrupt being handled, the `rapuyama-fc` clocksource becoming active, and BusyBox `/init` starting. The USB gadget shell is an additional working path confirmed on the phone.
 
 The display remains a limitation: it is driven through Broadcom VideoCore in command mode rather than as a simple scanout framebuffer. Use the USB shell or RAM log for observability. Reaching a shell does not mean that display, storage, radio, audio, or power-management support is complete; see
-[`../../docs/driver-re.md`](../../docs/driver-re.md) for the current driver findings.
+[`../../docs/driver-re.md`](../../docs/driver-re.md) and
+[`../../docs/videocore-display.md`](../../docs/videocore-display.md) for the current driver findings.
