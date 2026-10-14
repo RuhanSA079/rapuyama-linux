@@ -8,7 +8,15 @@
 This project takes over the phone from a running Symbian installation, hands control to an ARM Linux kernel, and brings up the RapuYama application SoC.
 It combines Symbian-side loaders and hardware probes, reverse engineering of Nokia's firmware, and experimental Linux drivers.
 
-> **Current status: Linux boots on the phone.** The checked-in successful boot log shows the RapuYama interrupt controller receiving the timer IRQ, the kernel switching to its RapuYama clocksource, and BusyBox `/init` starting. The current USB gadget setup also provides an interactive shell over USB serial.
+> **Current status: Linux boots on the phone and draws on its screen.** The first boot log shows the RapuYama interrupt controller receiving the timer IRQ, the kernel switching to its RapuYama clocksource, and BusyBox `/init` starting. An interactive shell runs over USB serial. Linux now also boots the Broadcom VideoCore itself, powers the LCD panel up and shows a framebuffer console on the phone's own display (see [the first display log](docs/first-display_SUCCESS.log)).
+
+## Milestones
+
+| Date | Milestone |
+| --- | --- |
+| 13.10.2026 | Kernel boots through to BusyBox `/init` ([log](docs/first-boot_SUCCESS.log)) |
+| 13.10.2026 | Interactive shell over the USB gadget serial port |
+| 14.10.2026 | First image on the E6 panel from Linux: VideoCore booted by the kernel, `/dev/fb0` + fbcon ([log](docs/first-display_SUCCESS.log), [notes](docs/videocore-display.md)) |
 
 ## The hardware
 
@@ -17,7 +25,7 @@ It combines Symbian-side loaders and hardware probes, reverse engineering of Nok
 | Application CPU | ARM1176JZF-S, ARMv6K |
 | SoC | Nokia RapuYama |
 | RAM | 256 MiB at physical `0x10000000` |
-| Display | Broadcom BCM2727 / VideoCore |
+| Display | Broadcom BCM2727B1 / VideoCore III, 640x480 panel (id `01 8b 79`), driven over the ViSSI host bus |
 | Boot environment | Symbian^3 / EKA2, with a one-way handoff to Linux |
 | Kernel | Linux 6.12, built for ARMv6 |
 
@@ -27,10 +35,12 @@ This is a device-specific port, not a generic EKA2 compatibility layer. Some wor
 
 - **Symbian takeover and probes** - inspect memory mappings and peripheral registers, run small ARM payloads, and transfer control to Linux.
 - **Linux kernel port** - an ARMv6 kernel configuration plus experimental RapuYama support for interrupt handling, timers, GPIO, clocks, watchdog, UART, and other peripherals.
+- **VideoCore display driver** - boots the BCM2727B1 with Nokia's firmware (extracted from your own ROM dump), speaks VCHI to it, powers the panel up like Symbian and exposes `/dev/fb0` with fbcon.
+- **Symbian display-stack emulator** - runs Nokia's display drivers from the ROM in Unicorn and records every message they send to the VideoCore; the Linux driver replays those sequences.
 - **RAM-backed early logging** - preserve early kernel output in reserved RAM so it can be retrieved after a failed boot, even without a serial console.
 - **Hardware notes** - reverse-engineering results from firmware analysis and live probes.
 
-The basic boot, timer/IRQ path, initramfs userspace, and USB serial shell have been exercised on the phone. Other devices and drivers remain experimental, their presence in the tree does not imply that they have been validated on hardware.
+The basic boot, timer/IRQ path, initramfs userspace, USB serial shell and the VideoCore display have been exercised on the phone. Other devices and drivers remain experimental, their presence in the tree does not imply that they have been validated on hardware.
 
 ## Build the kernel
 
@@ -86,6 +96,16 @@ picocom -b 115200 /dev/ttyACM0
 
 The shell runs on the phone's `ttyGS0`. `picocom` provides the host-side terminal. The USB-enabled DTB opts into this shell, while the base DTB uses the non-interactive init path.
 
+## Build with the display driver
+
+`build-kernel.sh` builds the plain USB-shell kernel. For the display, use `build-vc.sh`. It needs a dump of the phone's kernel ROM (`kern.bin`, see [ROM analysis](docs/rom-analysis.md)), because the VideoCore firmware is extracted from it at build time and is not part of this repository:
+
+```sh
+KERN_BIN=/path/to/kern.bin linux/kernel/build-vc.sh
+```
+
+Boot `linux/kernel/build-vc/arch/arm/boot/zImage` with `linux/kernel/build-vc/e6-vc.dtb` (as `E:\zImage` / `E:\e6.dtb`). After about 5 seconds the panel shows colour bars for 3 seconds, then the console. Driver parameters, the bring-up sequence and known issues are in S[`docs/videocore-display.md`](docs/videocore-display.md).
+
 ## Repository map
 
 | Path | Contents |
@@ -95,7 +115,7 @@ The shell runs on the phone's `ttyGS0`. `picocom` provides the host-side termina
 | [`linux/stage0/`](linux/stage0/) | Symbian-side loader and low-level experiments |
 | [`driver/`](driver/) | Symbian kernel drivers, SIS packaging, and deployment notes |
 | [`tools/`](tools/) | Log parsers and reverse-engineering utilities |
-| [`docs/`](docs/) | Hardware maps, driver notes, and investigation reports |
+| [`docs/`](docs/) | Hardware maps, driver notes, investigation reports, and the porting guide |
 | [`logs/`](logs/) | Captured output from experiments |
 
 ## Notes and references
@@ -106,11 +126,14 @@ The shell runs on the phone's `ttyGS0`. `picocom` provides the host-side termina
 - [RapuYama driver reverse engineering](docs/driver-re.md)
 - [Hardware memory map](docs/hw-memory-map.md)
 - [ROM analysis notes](docs/rom-analysis.md)
+- [VideoCore display: overview and driver](docs/videocore-display.md)
+- [VideoCore link: wire-level notes](docs/videocore-link.md)
+- [Porting guide for other RapuYama / VideoCore phones](docs/porting-guide.md)
 
 ## Current boundaries
 
 - This is an early userspace bring-up, not yet a complete everyday phone OS.
-- The display is not currently a dependable way to observe Linux startup.
+- The display works, but is new: there are visible artifacts, every update sends the full 1.2 MB frame over PIO (~170 ms), and blanking/backlight control are not implemented. The display comes up about 5 seconds into boot, so use the USB shell or the RAM log for early messages.
 - Treat register addresses and undocumented peripheral behavior as hypotheses unless the notes explicitly say they were checked on live hardware.
 - A successful boot does not imply that every peripheral or power-management path is implemented.
 - The boot handoff is one-way. A failed run may require the phone's watchdog reset to recover.

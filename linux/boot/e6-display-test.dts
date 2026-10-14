@@ -8,11 +8,15 @@
 };
 
 / {
-	reserved-memory {
-		display_fb: framebuffer@10480000 {
-			reg = <0x10480000 0x00400000>;
-			no-map;
-		};
+	/*
+	 * NOT under /reserved-memory: with PHYS_OFFSET=0x10a00000 this range is
+	 * already outside Linux RAM, and a reserved-memory node below
+	 * PHYS_OFFSET broke paging_init ("BUG: not creating mapping for
+	 * 0x00000000 at 0xaf600000"). A plain node without "compatible" is not
+	 * probed; the fb driver only reads its reg via the memory-region phandle.
+	 */
+	display_fb: framebuffer-mem@10480000 {
+		reg = <0x10480000 0x00400000>;
 	};
 
 	rapuyama_fb {

@@ -1,0 +1,20 @@
+/* e6-usb.dts + the VideoCore display driver (drivers/soc/rapuyama/videocore.c).
+ * the kernel boots the VC itself (firmware in /lib/firmware/vc, see
+ * build-vc.sh), sets the panel up and exposes /dev/fb0 with fbcon on it */
+/include/ "e6-usb.dts"
+
+/ {
+	chosen {
+		bootargs = "earlycon=ramcon,0x1f000000 keep_bootcon console=tty0 console=ttyGS0,115200 panic=10 nohlt e6.usbsh e6.fbtest";
+	};
+
+	/* ViSSI host bus to the BCM2727. clock: power resource 0x18
+	 * EHwClkViSSI. RUN = gpio 92 (high = VC runs), HAT (gpio 63) is
+	 * polled through the bus status instead */
+	videocore@20025800 {
+		compatible = "nokia,rapuyama-videocore";
+		reg = <0x20025800 0x100>;
+		clocks = <&cgc 0x18>;
+		run-gpios = <&gpio 92 0>;
+	};
+};

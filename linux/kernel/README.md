@@ -22,9 +22,35 @@ Out-of-tree into `build/` (not in git), the submodule stays clean.
 ```
 Result: `build/arch/arm/boot/zImage`
 
+## Build with the VideoCore display driver
+```
+KERN_BIN=/path/to/kern.bin ./build-vc.sh
+```
+Output goes to `build-vc/` (not in git):
+- `arch/arm/boot/zImage`
+- `e6-vc.dtb`, built from `../boot/e6-vc.dts`
+
+On top of `e6.config` the script enables `SOC_RAPUYAMA_VIDEOCORE`, `FB` and
+`FRAMEBUFFER_CONSOLE` and disables the diagnostic `FB_RAPUYAMA`. It adds two
+things to the initramfs:
+- `fbtest`
+- the VideoCore images (`/lib/firmware/vc/vc-{loader-a,loader-b,main}.{bin,trl}`), which
+  `../../tools/vc_extract.py` extracts from `kern.bin` at build time.
+
+The firmware is Nokia's and is never committed. The normal `PHYS_OFFSET` is
+kept, because the driver reboots the VideoCore and does not need Symbian's
+framebuffer.
+
+The driver is `drivers/soc/rapuyama/videocore.c` in the kernel fork (branch
+`e6`). Until it is committed there, apply `videocore-driver.patch` in the
+submodule:
+```
+git -C linux apply ../videocore-driver.patch
+```
+
 ## Status
 
-The E6 kernel has booted on the phone through to BusyBox initramfs userspace.
+The E6 kernel has booted on the phone through to BusyBox initramfs userspace, and with `build-vc.sh` it also drives the display: VideoCore boot, panel power-up, `/dev/fb0` with fbcon (see [`../../docs/videocore-display.md`](../../docs/videocore-display.md)).
 The checked-in [`../../docs/first-boot_SUCCESS.log`](../../docs/first-boot_SUCCESS.log) records the first timer IRQ, the switch to `rapuyama-fc` as clocksource, and execution of `/init`. The USB-enabled board DTB is used for the interactive
 USB gadget serial shell, confirmed on the device with `picocom`.
 

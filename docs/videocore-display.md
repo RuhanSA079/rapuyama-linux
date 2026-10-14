@@ -1,89 +1,174 @@
-# Nokia E6 BCM2727B1 VideoCore III display: current findings
+# Nokia E6 display: BCM2727B1 VideoCore III from Linux
 
 ## Status
 
-The command-mode panel refresh path is not implemented in Linux. The kernel now has an experimental fbdev staging driver for reserved framebuffer memory, but it only maps that memory and does not submit updates to VideoCore. The normal E6 device tree does not enable it - a separate diagnostic DTB does.
+**Linux shows an image on the E6 panel** (14.10.2026). The kernel driver
+`drivers/soc/rapuyama/videocore.c` does the following:
 
-Most findings below come from checked-in reverse-engineering notes and
-locally extracted ROM/Ghidra output. A read-only USB-shell inspection confirmed that Linux exposes no `/dev/fb*` device (only the virtual `fbcon` class entry) and that the running kernel's reserved image range covers
-the known framebuffer address. No framebuffer writes or display-register accesses were attempted.
+1. Boots the VideoCore over the ViSSI host bus with Nokia's own firmware.
+2. Brings up VCHI.
+3. Powers the LCD panel up the way Symbian does.
+4. Exposes a 640x480 XRGB8888 `/dev/fb0`.
+5. Pushes the framebuffer to the VideoCore whenever it changes.
 
-## Current best-fit architecture
+fbcon runs on it, so the kernel console and the shell are visible on the phone
+itself. The log of the first run is in
+[`first-display_SUCCESS.log`](first-display_SUCCESS.log).
+
+Known limitations:
+
+- Some artifacts are visible on screen. They are not diagnosed yet: pixel
+  format, stride, or fbcon writing while a frame is in flight.
+- Every update sends the whole frame: 1.2 MB of PIO bulk, about 170 ms. There
+  is no dirty-rectangle or DMA path yet.
+- Only boot loader A is accepted. Loader B, Symbian's power-up variant, makes
+  the VC send its hello again (`loader answered 1/1`).
+- No suspend, blanking, backlight class or rotation. Brightness is a module
+  parameter.
+
+The wire-level details (host bus registers, boot protocol, VCHI slots, bulk
+transfers, DSPC/DISP/BFMX message layouts) are in
+[`videocore-link.md`](videocore-link.md). This page is the overview.
+
+## Stack
 
 ```text
-ARM vcdriver.dll
-  |_ VideoCore boot-ROM exchange over MeSSI; transfer the onboard VC image
-       |_ VCHI message/bulk transport over MeSSI and CCP2
-            |_ vcdispmanvchi.dll / vcdispman.dll
-                 |_ dispcommanddrv.dll / display_chipset_drv_ive_bc.dll
-                      |_ BCM2727B1 VideoCore III and command-mode panel
+Linux fbdev (/dev/fb0, deferred I/O)                videocore.c
+  |_ BFMX  vc_bufmanx: copy the frame into a VC resource (bulk)
+  |_ DISP  dispman: display, resource, element, update/submit
+  |_ UPDH  dispman update handler (opened, messages ignored)
+  |_ DSPC  dispcommanddrv: panel config, power, DCS batches/reads
+       |_ VCHI: 0x1020-byte slots, credits, CTRL service, BULX bulk
+            |_ ViSSI host bus 0x20025800, 16-bit PIO, HAT/RUN
+                 |_ BCM2727B1, booted with loader A + main image
+                      |_ panel 01 8b 79, 640x480 over interface id 4
 ```
 
-The names and overall layering are supported by the ROM module inventory and the existing decompilation. The exact message schemas and service command IDs are not yet reconstructed.
+On Symbian the same layers are `vcdriver.dll`, `vchi.dll`, `vc_bufmanx`,
+`vcdispman*.dll`, `dispcommanddrv.dll` and
+`display_chipset_drv_ive_bc.dll`. The Linux driver puts all of them into one
+file and keeps only what the E6 needs.
 
-## Firmware image package
+## Bring-up sequence
 
-The ROM listing contains `Sys\\Bin\\unsigned_2727b1.dll` (about 1 MiB). Its strings include `bcm2727b1`, `dispcontrol.vll`, `vchi_dispcontrol_server_init`, and the build path `/Z:/vlls/bcm2727b1/`. This confirms the firmware bundle contains the VideoCore display-control service, but does not establish that the E32 container can be loaded directly by Linux or that those service modules are individually extractable from it. The Symbian-side `DVCDriver::Boot()` remains the only recovered loader path; its staged transfer descriptors still need decoding.
-The ROM can be re-extracted with [`tools/rom_walk.py`](../tools/rom_walk.py).
+The driver repeats what Symbian sends. The sequence was not guessed: it was
+captured by running Symbian's display stack from `kern.bin` in an emulator
+(see "How the sequence was obtained" below).
 
-## More detail from the transport setup
+1. **VC boot.** Raise RUN (gpio 92). The VC sends a hello, the host sends
+   `vc-loader-a` and gets an ack. The VC sends a second hello, the host sends
+   `vc-main` and gets the final ack.
+2. **VCHI.** Wait for the VC's CTRL connect, answer it, then open the services
+   with the client flags `0x10`.
+3. **DSPC install.** Panel config (cmd 3), then ping (cmd 5).
+4. **Op 1, init.** Read panel registers `0a`..`0e`. Symbian branches on `0x0a`
+   bit 2 (display on).
+   - **Cold** (the driver default): power `0x41`, `0x40`, wait 245 ms; read
+     the panel id (`dc db da`); config; power `0x81`, wait 51 ms; batch
+     `[53 3f, 51 3f, 55 00, 11]` (sleep out), wait 120 ms; config; colour
+     matrix (cmd 7, all zero); batch `[26 01, 36 00, 3a 70]`.
+   - **Warm**: config; power `0x81`; backlight; mode; reads; op 8.
+5. **Compose.** Run the dispman calls in this order:
+   - `DisplayOpen(0)`
+   - `ResourceCreate(0x2b, 640, 480)`
+   - BFMX write
+   - `UpdateStart`
+   - `ElementAdd`
+   - `SetBackground`
+   - `SubmitSync`
+6. **Display on.** Send batch `[29]`, read registers `0a`..`0e`, then op 8 three
+   seconds later.
+7. **Refresh, op 3.** The first refresh sends batch `[3a 70, 35 00, 34]`,
+   every later one sends `[35 00]`. Each refresh then does the following:
+   - BFMX write
+   - `UpdateStart`
+   - `ElementModified` with the full rectangle
+   - `SubmitSync`
 
-The existing `vcdriver.dll` decompilation exposes concrete setup steps beyond the high-level module names:
+The cold path is required because Linux always boots the VC from scratch.
+After the VC boot the panel still reads `0a = 1c`, so Symbian's own check
+would pick the warm path. But nothing drives the panel at that point: its
+booster stays off and the screen stays black. The cold path power-cycles the
+panel through the VC and takes it out of sleep.
 
-1. `FUN_8032a3c8` configures channel-related state through a helper for IDs `0x7e`, `0x7d`, `0x7c`, and `0x6a..0x79`, then installs callbacks and creates a semaphore. The helper's exact semantics are not recovered.
-2. It initializes the block at physical `0x20025800` through `FUN_8032a368`, then initializes the block at `0x20024800` through `FUN_8032a154`. The latter binds interrupt line `0x92` and programs multiple registers, including a slot populated with a linear-to-physical address. The raw values in these setup functions are not sufficient to identify the full register semantics or safe reset state.
-3. The interrupt callback `FUN_8032a020` reads and acknowledges status at `0x20024818`; it handles a FIFO-related status bit and invokes `FUN_80329ec8` to process queued work. Other status bits are logged asgraphics FIFO underflow and sync loss.
-4. The boot routine `FUN_8032cd50` sends a message, polls for a response, and parses response type/status fields. On the success path it retrieves image metadata, sends data using `FUN_8032cb40`, polls/parses again, and handles another transfer using a descriptor at image offset `0x1c`. It only marks the final stage successful after a further response. This establishes a multi-exchange image boot path, but not the exact on-wire message formats, meanings of status values, retry timing, or whether this is the only boot path used by the shipped device.
-5. The same module configures CCP2 receive registers around `0x20034000..0x20034240` and uses the clock/pin-related registers noted in [driver-re.md](./driver-re.md). The current static analysis does not yet prove which CCP2 channel carries each VCHI traffic class or establish a complete, safe initialization order across power, clocks, pins, MeSSI, and CCP2.
+## Using it
 
-The separate `dispcommanddrv.dll` creates synchronization objects named for matrix, power, ping, self-test, and callbacks. That is evidence of display control operations, but not the actual DISPMANX service protocol. The minimum command sequence to configure the panel or submit an update remains unknown.
+1. Build the kernel, initramfs and DTB with
+   [`linux/kernel/build-vc.sh`](../linux/kernel/build-vc.sh):
+   ```sh
+   KERN_BIN=/path/to/kern.bin linux/kernel/build-vc.sh
+   ```
+   The script enables `CONFIG_SOC_RAPUYAMA_VIDEOCORE`, `FB` and
+   `FRAMEBUFFER_CONSOLE`. It also extracts the VideoCore images from your ROM
+   dump into the initramfs (`/lib/firmware/vc/`) with
+   [`tools/vc_extract.py`](../tools/vc_extract.py). The firmware is Nokia's
+   and is not in this repository.
+2. Boot `linux/kernel/build-vc/arch/arm/boot/zImage` with
+   `linux/kernel/build-vc/e6-vc.dtb`. The DTB is `e6-usb.dts` plus the
+   `videocore@20025800` node and `console=tty0`.
+3. Watch the result with `dmesg | grep -i videocore`. The interesting lines
+   are:
+   - `panel power-up: cold path`
+   - `display up, 640x480`
+   - `test pattern: 0`
 
-The host-side `vcdispman.dll` does expose a VCHI request wrapper. Its helpers submit request IDs `0x04`, `0x05`, `0x0a`, `0x0c`, `0x0d`, `0x0f`, `0x10`, `0x11`, `0x12`, `0x13`, `0x15`, `0x17`, `0x18`, and `0x19` with payloads between 4 and 64 bytes. The wrapper marks some IDs as reply-bearing, serializes each call with a host mutex, and waits for a four-byte reply for synchronous requests. The service registration itself goes through VCHI with a 36-byte descriptor. This recovers part of the host RPC envelope, not the VideoCore service's semantics: the registration descriptor values and command payload schemas are still unresolved, so the IDs cannot safely be called from Linux yet.
+   The panel first shows 8 colour bars for 3 seconds, then the console.
 
-The VCHI service identifier initialized by `vcdispmanvchi.dll` is the eight-byte value `DISPUPDH` (two little-endian four-character words, `DISP` + `UPDH`). This identifies the host-side display-update-handler service, but does not imply that the raw chipset `0x40` batch is the payload of that service; the code shows separate host wrappers and transport layers.
+The kernel driver itself is in the kernel fork, branch `e6`, at
+`drivers/soc/rapuyama/`. Until it lands there, apply
+[`linux/kernel/videocore-driver.patch`](../linux/kernel/videocore-driver.patch)
+to the submodule.
 
-The extracted `display_chipset_drv_ive_bc.dll` provides a little more detail about the framebuffer-facing API. Its allocation-size helper rounds the width up to a multiple of 16, then computes row bytes as follows:
+Module parameters (`videocore.<name>=` on the kernel command line):
 
-| API format value | Row-byte calculation |
-|---|---|
-| `2` or `4` | `ALIGN(width, 16) * 4` |
-| `0x10` | `ALIGN(width, 16) * 3` |
-| `0x20` | `ALIGN(width, 16) * 2` |
-| `0x2000` | zero (special/non-pixel allocation) |
-
-The code multiplies this row size by the height when allocating physical RAM.
-This is useful evidence for the allocation ABI, but does not identify channel order, alpha semantics, or a panel update format. Its update path gathers a batch of pending operations and submits them through the display-command transport with command `0x40`. The ARM-side batching helper treats each operation as a 24-byte record: it emits the first five 32-bit fields in the order at offsets `0x00`, `0x0c`, `0x08`, `0x04`, and `0x10`; if the record's word at `0x14` is nonzero, it also emits a variable-length data segment whose length is the word at `0x04`. The batch starts with a four-byte operation-count segment. These are host-side scatter/gather details only; the meanings of the fields, the variable data, and the VC-side meaning of command `0x40` are still unresolved. Therefore this information is not yet enough to safely construct a Linux update request.
-
-## Evidence
-
-| Finding | Confidence | Evidence and limits |
+| parameter | default | meaning |
 |---|---|---|
-| The E6 display uses a Broadcom BCM2727B1 / VideoCore III, and the VideoCore image package is included in Nokia firmware. | High | ROM strings include `Video/Core III H/W`, `bcm2727b1`, `VideoCore image ID`, and `unsigned_2727b1.dll`. |
-| The ARM-side `vcdriver.dll` has a multi-exchange VideoCore boot path that parses image metadata, transfers image data, and polls for responses. | High for code structure; medium for protocol interpretation | Ghidra decompilation of `FUN_8032cd50` at `0x8032cd50` and helper `FUN_8032cb40` at `0x8032cb40` in the extracted kernel ROM. The exact wire constants, payload meanings, and handshake timing are not fully recovered. |
-| Two MeSSI blocks participate in the VideoCore link, with block `0x20025800` initialized before `0x20024800`; interrupt line `0x92` is bound by the latter's setup. | High for static code references; not live-tested here | Ghidra decompilation of `FUN_8032a3c8`, `FUN_8032a368`, and `FUN_8032a154`. This does not establish reset-state requirements, complete register semantics, or a safe Linux initialization sequence. |
-| The firmware also configures clocks, GPIO/mux, and CCP2 receive support around the VideoCore link. | Medium | References in `docs/driver-re.md` include `0x200318e0`, `0x200319e4`, `0x20033008`, `0x20033038`, `0x20033178`, and `0x20034000..0x20034240`. Exact sequencing and safe Linux ownership remain to be established. |
-| VCHI handles both MeSSI and CCP2 data paths and has transport error handling. | Medium | `vchi.dll` decompilation contains MeSSI/CCP2 CRC-failure paths, VCHI receive/bulk handling, and a VideoCore-enable failure path. The complete channel negotiation and slot layout have not been translated into a Linux implementation. |
-| Display-management modules sit above VCHI. | Medium | ROM module inventory includes `vcdispmanvchi.dll`, `vcdispman.dll`, `dispcommanddrv.dll`, and `display_chipset_drv_ive_bc.dll`. This confirms the component chain, not the complete commands or ABI. |
-| The ARM `vcdispman.dll` has a VCHI RPC wrapper with a set of numeric request IDs and optional four-byte replies. | High for wrapper structure; low for command meanings | `FUN_80344fcc`, `FUN_803450d8`, `FUN_80345168`, and the wrappers in `vcdispman.dll`; request payload schemas and registration descriptor are not decoded. |
-| The display-update-handler VCHI service uses the eight-byte identifier `DISPUPDH`. | High for the host-side identifier | `vcdispmanvchi.dll`, `FUN_80345384` initializes the two little-endian words `0x50534944` and `0x48445055`; this does not identify its message schema. |
-| The display-chipset update path builds scatter/gather batches from 24-byte host operation records and sends them under command `0x40`. | High for host record traversal/order; low for field semantics | `FUN_80341244` constructs segments; `FUN_80340b7c` queues the command path. The VC-side protocol and actual operation meanings remain unknown. |
-| `0x10480000` is a 4 MiB framebuffer allocation, but writing it alone does not refresh the panel after Symbian stops. | High in the existing hardware notes | `docs/hw-memory-map.md` records a fill test while Symbian was alive and explains that the panel is command-mode. A Linux display path must trigger updates through VideoCore; direct scanout is not established. |
-| The current kernel image overwrites the entire framebuffer allocation. | High for the current build | `Image` loads at `0x10008000`, has size 19,643,844 bytes, and ends at `0x112c3dc4`; framebuffer is `0x10480000..0x10880000`. Resolve memory ownership before any simplefb/preserved-framebuffer experiment. |
-| The running Linux USB-shell image does not expose a framebuffer device. | High for the inspected boot | Read-only shell query found no `/dev/fb*`; `/sys/class/graphics` contains only virtual `fbcon`. `/proc/iomem` lists kernel code at `0x10008000..0x10efffff`, intersecting the framebuffer range. |
-| The display chipset's buffer allocator uses 16-pixel row alignment and supports API format values `2`, `4`, `0x10`, and `0x20` with 4/3/2 bytes per aligned pixel respectively. | High for allocation arithmetic; low for pixel semantics | `display_chipset_drv_ive_bc.dll`, helper `FUN_8034c808` and caller `FUN_8034c86c`. The implementation does not establish color channel order or the panel's accepted format. |
+| `cold` | `1` | panel power-up path: `1` cold, `0` warm, `-1` choose by `0x0a` like Symbian |
+| `brightness` | `0x3f` | DCS `0x51` value (Symbian uses `0x3f`) |
+| `test_pattern` | `1` | colour bars for 3 s after bring-up |
+| `matrix` | `0` | send an identity colour matrix instead of Symbian's zero one |
+| `loader_b` | `0` | boot with loader B (rejected on the E6, kept for experiments) |
+| `debug` | `1` | log VCHI traffic: `1` bring-up and first frames, `2` everything |
 
-## Linux starting point
+## How the sequence was obtained
 
-The kernel tree already contains the generic Broadcom VCHIQ service stack under `drivers/staging/vc04_services`, and `linux/kernel/e6.config` sets `CONFIG_BCM2835_VCHIQ=m`. The current BCM2835 VCHIQ device binding, however, describes a doorbell register pair (`brcm,bcm2835-vchiq`). The E6 firmware references MeSSI and CCP2 instead. The existing Broadcom platform transport must therefore not be assumed to work on RapuYama merely because both sides use VideoCore/VCHI terminology; reuse would require proving compatibility or adding the correct transport backend.
+1. Ghidra decompilation of the display modules from `kern.bin` was used for
+   the structure: [`driver-re.md`](driver-re.md) describes the pipeline.
+2. Static reading went wrong in places. Ghidra inverted a branch condition, and
+   one state machine depends on what the panel answers. So the real Symbian
+   code was run in a Unicorn harness:
+   [`tools/vcemu/run_panel.py`](../tools/vcemu/run_panel.py).
+3. The harness does the following:
+   - Loads every module's `.data` from the ROM headers.
+   - Runs the static constructors.
+   - Stubs the EKA2 kernel: DFCs, timers, physical RAM and the VCHI service
+     open.
+   - Answers DSPC requests with `{token, 0}` and DCS reads with the E6
+     panel's values.
+   - Logs every message the stack would send to the VideoCore.
+4. `PANEL_0A=<hex>` sets the answer to the `0x0a` read. `00` gives
+   [`symbian-display-sequence-cold.txt`](symbian-display-sequence-cold.txt),
+   `9c` gives
+   [`symbian-display-sequence-warm.txt`](symbian-display-sequence-warm.txt).
+5. Timer ticks in those logs are milliseconds.
 
-The new `SOC_RAPUYAMA_VIDEOCORE` option is off by default. Its platform driver matches `nokia,rapuyama-videocore`, which is intentionally absent from the current DTS. If explicitly enabled and bound to a node, probe reports `-EOPNOTSUPP`; it performs no register reads/writes and does not claim that the display works.
+Lesson learned: the first capture answered `0x0a` with `9c` and therefore
+recorded the warm path. The resulting driver was "1:1" but still left the
+screen black. When you port the sequence, feed the emulator the values your
+real panel returns.
 
-An experimental kernel build with `PHYS_OFFSET=0x10880000` is available through [`linux/kernel/build-display-test.sh`](../linux/kernel/build-display-test.sh). Its decompressed image starts at `0x10888000`, above the framebuffer, and the paired USB-shell DTB is copied to `linux/kernel/build-display/e6-usb.dtb`. The additional `e6-display-test.dtb` reserves `0x10480000..0x10880000` and enables `FB_RAPUYAMA`, exposing the mapped staging memory as `/dev/fb0`. The diagnostic initramfs writes color bars to the buffer after the USB shell is configured and logs whether that write succeeds. This provides a concrete framebuffer test without changing the normal kernel configuration. It does not load or update the VideoCore firmware, send display commands, or guarantee a refresh of the command-mode panel.
+[`linux/initramfs/vcprobe.c`](../linux/initramfs/vcprobe.c) is the userspace
+`/dev/mem` probe used before the kernel driver existed. It is still useful to
+poke the bus or single DSPC commands by hand.
 
-## Next reverse-engineering steps
+## Next steps
 
-1. Recover the VideoCore boot message layouts and exact stage transitions from `vcdriver.dll`, including the image header and transfer chunking.
-2. Decode MeSSI initialization, interrupt/handshake behavior, and ownership requirements for clocks, pins, and regulators before any Linux MMIO access.
-3. Reconstruct VCHI negotiation, control-message and bulk-transfer framing, determine whether the Linux VCHIQ core can be adapted or only reused at a higher service layer.
-4. Trace the display-management client far enough to identify the minimum service sequence for a framebuffer update and the required framebuffer format/stride.
-5. Only after those steps, design the real transport and display interfaces, add a DTS binding, and plan separately supervised hardware validation.
+1. Find out where the artifacts come from: check the colour order of the bars,
+   the stride, and whether fbcon writes during a bulk transfer.
+2. Send only the dirty rectangle: BFMX source and destination rectangles plus
+   `ElementModified` with the real bounds.
+3. Use the gfx DMA engine (`0x20024800`, irq `0x92`) for bulk data instead of
+   PIO.
+4. Blanking and power-off (Symbian op 2: `28 38 13`, `53 00 10`, power
+   `0x80 0x41 0x40`), and a backlight class device.
+5. Find out why loader B is rejected (`1/1`). Symbian uses it at power-up.

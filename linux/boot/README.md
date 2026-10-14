@@ -9,6 +9,7 @@ The loader boots Linux on the Nokia E6 through to BusyBox initramfs userspace. T
 | `tramp_boot.S` | one-way handoff stub: identity page, IRQ/MMU/caches off, set r0=0/r1=mach/r2=dtb, `bx` into the kernel |
 | `e6.dts` / `e6.dtb` | device tree; `/memory` describes the fixed 256 MiB RAM range at `0x10000000` |
 | `e6-usb.dts` / `e6-usb.dtb` | USB gadget variant; enables MUSB and the `e6.usbsh` init path |
+| `e6-vc.dts` | `e6-usb.dts` + the `videocore@20025800` node (`nokia,rapuyama-videocore`: ViSSI host bus, clock `0x18`, RUN = gpio 92) and `console=tty0`; built by `../kernel/build-vc.sh` |
 | `../stage0/symbian-loader/runblob_ldd.cpp` | booter driver: `AllocBoot` (contiguous phys via `Epoc::AllocPhysicalRam` + `DPlatChunkHw`), `LoadChunk` (stream bytes in), `Boot` (optional legacy DTB sentinel patch, clean caches, jump via `tramp_boot`) |
 | `../stage0/symbian-loader/boot_app.cpp` | streams `E:\zImage` + `E:\e6.dtb` into the chunk and calls `Boot` |
 | `../../driver/boot.sis` | installer (runblob.ldd + boot.exe) |
@@ -42,7 +43,27 @@ The BusyBox shell runs on the phone's `ttyGS0`. This is an interactive userspace
 
 The base `e6.dtb` selects a non-interactive init path that logs a sign of life and reboots after 30 seconds. The USB DTB selects the persistent shell path. If the gadget does not appear or the host does not enumerate it, init logs the failure and reboots so the RAM log can be retrieved.
 
-## Framebuffer-preserving kernel experiment
+## Boot with the display
+
+1. Build with `KERN_BIN=/path/to/kern.bin ../kernel/build-vc.sh`.
+2. Copy `linux/kernel/build-vc/arch/arm/boot/zImage` to the phone as
+   `E:\zImage`.
+3. Copy `linux/kernel/build-vc/e6-vc.dtb` to the phone as `E:\e6.dtb`.
+4. Boot as for the USB shell. The USB shell keeps working.
+
+About 2 seconds after the handoff, the driver reboots the VideoCore. The
+Symbian picture goes away and the backlight comes on. Around 5 seconds the
+panel shows 8 colour bars for 3 seconds, then the console. Check with
+`dmesg | grep -i videocore`. Driver parameters (`videocore.cold=`,
+`videocore.brightness=`, `videocore.debug=` ...) are described in
+[`../../docs/videocore-display.md`](../../docs/videocore-display.md).
+
+## Framebuffer-preserving kernel experiment (superseded)
+
+Superseded by the VideoCore driver above. This experiment kept Symbian's
+framebuffer memory, but nothing refreshed the panel from it. It is kept for
+reference.
+
 
 The current `Image` is loaded at `0x10008000` and overwrites the framebuffer at
 `0x10480000..0x10880000`. A separate diagnostic zImage can be built with
@@ -73,6 +94,6 @@ power-off confirms that an IRQ reached the vector; no power-off is inconclusive 
 The successful boot log is preserved at
 [`../../docs/first-boot_SUCCESS.log`](../../docs/first-boot_SUCCESS.log). It shows the timer interrupt being handled, the `rapuyama-fc` clocksource becoming active, and BusyBox `/init` starting. The USB gadget shell is an additional working path confirmed on the phone.
 
-The display remains a limitation: it is driven through Broadcom VideoCore in command mode rather than as a simple scanout framebuffer. Use the USB shell or RAM log for observability. Reaching a shell does not mean that display, storage, radio, audio, or power-management support is complete; see
+The display works with the `build-vc.sh` kernel and `e6-vc.dtb` (see "Boot with the display" above). It comes up about 5 seconds into boot, so early boot problems still need the USB shell or the RAM log. Reaching a shell does not mean that display, storage, radio, audio, or power-management support is complete; see
 [`../../docs/driver-re.md`](../../docs/driver-re.md) and
 [`../../docs/videocore-display.md`](../../docs/videocore-display.md) for the current driver findings.
