@@ -130,8 +130,9 @@
 			reg = <0x20038800 0x500>;
 			interrupts = <183>, <215>;
 			interrupt-names = "mc", "dma";
-			/* EHwClkDomHSUSB (power domain + gates), EHwClkHSUSB */
-			clocks = <&cgc 0x0e>, <&cgc 0x0f>;
+			/* EHwClkDomHSUSB (power domain + gates), EHwClkHSUSB, and
+			 * EHwClkI2C0 + EHwClkDspSpi1, which usb.dll also asks for */
+			clocks = <&cgc 0x0e>, <&cgc 0x0f>, <&cgc 0x10>, <&cgc 0x21>;
 			phys = <&usb_phy>;
 			dr_mode = "peripheral";
 			status = "disabled";
