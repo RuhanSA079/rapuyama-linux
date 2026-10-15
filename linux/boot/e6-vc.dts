@@ -5,7 +5,7 @@
 
 / {
 	chosen {
-		bootargs = "earlycon=ramcon,0x1f000000 keep_bootcon console=tty0 console=ttyGS0,115200 panic=10 nohlt e6.usbsh e6.fbtest";
+		bootargs = "earlycon=ramcon,0x1f000000 keep_bootcon console=tty0 panic=10 nohlt e6.usbsh e6.fbtest";
 	};
 
 	/* ViSSI host bus to the BCM2727. clock: power resource 0x18

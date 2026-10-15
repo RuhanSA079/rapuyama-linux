@@ -26,7 +26,8 @@ python3 "$HERE/../../tools/vc_extract.py" "$KERN_BIN" "$KOUT/vcfw"
 
 cp "$HERE/../initramfs/initramfs.list" "$KOUT/initramfs.list"
 {
-	printf 'dir /usr 755 0 0\ndir /usr/bin 755 0 0\n'
+	# the list has no trailing newline, start on a fresh line
+	printf '\ndir /usr 755 0 0\ndir /usr/bin 755 0 0\n'
 	printf 'file /usr/bin/fbtest %s 755 0 0\n' "$KOUT/fbtest"
 	printf 'file /usr/bin/vcprobe %s 755 0 0\n' "$KOUT/vcprobe"
 	printf 'dir /lib 755 0 0\ndir /lib/firmware 755 0 0\ndir /lib/firmware/vc 755 0 0\n'
@@ -42,6 +43,7 @@ cp "$HERE/../initramfs/initramfs.list" "$KOUT/initramfs.list"
 "$KSRC/scripts/config" --file "$KOUT/.config" --enable FB --enable FRAMEBUFFER_CONSOLE
 "$KSRC/scripts/config" --file "$KOUT/.config" --enable SOC_RAPUYAMA_VIDEOCORE
 "$KSRC/scripts/config" --file "$KOUT/.config" --set-str INITRAMFS_SOURCE "$KOUT/initramfs.list"
+"$KSRC/scripts/config" --file "$KOUT/.config" --enable RAPUYAMA_MODEM
 
 make -C "$KSRC" O="$KOUT" olddefconfig
 make -C "$KSRC" O="$KOUT" -j"$(nproc)" zImage
@@ -49,8 +51,11 @@ make -C "$KSRC" O="$KOUT" scripts_dtc
 
 "$KOUT/scripts/dtc/dtc" -I dts -O dtb -i "$HERE/../boot" \
 	-o "$KOUT/e6-vc.dtb" "$HERE/../boot/e6-vc.dts"
+"$KOUT/scripts/dtc/dtc" -I dts -O dtb -i "$HERE/../boot" \
+	-o "$KOUT/e6-keys.dtb" "$HERE/../boot/e6-keys.dts"
 
 echo
 echo "zImage: $KOUT/arch/arm/boot/zImage"
 echo "DTB:    $KOUT/e6-vc.dtb"
+echo "        $KOUT/e6-keys.dtb (i2c on, for keyscan)"
 ls -lh "$KOUT/arch/arm/boot/zImage"

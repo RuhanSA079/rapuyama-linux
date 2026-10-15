@@ -17,6 +17,17 @@
 #include "takeover.hdr" // KTakeover[], KTakeoverLen (one-way takeover)
 #include "tramp_boot.hdr" // KTrampBoot[], KTrampBootLen (zImage handoff)
 #include "kickloop.hdr" // KKickLoop[], KKickLoopLen (watchdog test)
+#include "securetrace.hdr" // KSecureTrace[], KSecureTraceLen (counter-gap trace)
+#include "smcprobe.hdr" // KSmcProbe[], KSmcProbeLen (secure-call feasibility probe)
+#include "hook.hdr" // KHook[], KHookLen (transport-fn capture trampoline)
+
+// securitykext monitor-call transport pointer = channel object 0xc800d1c4 + 0x14
+// (confirmed live by e6secs). hooking it captures every secure request.
+static const TUint32 KTransportPtr=0xc800d1d8u;
+static DPlatChunkHw* gHookChunk=NULL; // persistent exec page holding the hook
+static TUint32* gHookRing=NULL; // capture ring (kernel heap)
+static TUint32 gHookOrig=0; // saved original transport ptr (0x908e0001)
+static TLinAddr gHookLin=0; // hook code global va
 
 typedef TInt (*TStubFn)(TUint32 aMarkerPhys, TUint32 aVal);
 typedef void (*TVoidFn)(void);
@@ -337,6 +348,10 @@ TInt DRunBlobChan::Request(TInt aFunction, TAny* a1, TAny* a2){
 	if(aFunction==RRunBlob::EControlTakeover){return OneWay(KTakeover, KTakeoverLen);}
 	// EControlKickLoop: ONE-WAY. kill symbian, kick the watchdogs forever
 	if(aFunction==RRunBlob::EControlKickLoop){return OneWay(KKickLoop, KKickLoopLen);}
+	// EControlSecureTrace: ONE-WAY. watchdog-fed loop with fast-counter log
+	if(aFunction==RRunBlob::EControlSecureTrace){return OneWay(KSecureTrace, KSecureTraceLen);}
+	// EControlSmcProbe: ONE-WAY. feed watchdogs, do one smc #0, log if it returned
+	if(aFunction==RRunBlob::EControlSmcProbe){return OneWay(KSmcProbe, KSmcProbeLen);}
 
 	// booter: AllocBoot / LoadChunk / Boot
 	if(aFunction==RRunBlob::EControlAllocBoot){
@@ -491,6 +506,79 @@ TInt DRunBlobChan::Request(TInt aFunction, TAny* a1, TAny* a2){
 		return KErrNone;
 	}
 
+	// EControlSnoopPoll: tight-poll securitykext's request descriptor at virt
+	// 0xc670c450 (= phys 0x1ffec450, in the mapped 0x1ffe0000 ram window at
+	// c6700000) and snapshot it the instant cmd (word0) is non-zero, to catch the
+	// transient secure request. a1 = out buffer (40 words), a2 = iterations per
+	// burst (0 = default). returns 1 if a request was caught this burst, else 0.
+	// read-only, no interrupt mask, so symbian keeps running between bursts
+	if(aFunction==RRunBlob::EControlSnoopPoll){
+		volatile TUint32* d=(volatile TUint32*)0xc670c450u; // descriptor
+		TUint32 iters=(TUint32)a2; if(iters==0){iters=0x800000u;}
+		TUint32 cmd=0;
+		for(TUint32 i=0; i<iters; ++i){cmd=d[0]; if(cmd!=0){break;}}
+		if(cmd==0){return 0;}
+		TUint32 out[40];
+		for(TInt k=0; k<40; ++k){out[k]=0;}
+		for(TInt k=0; k<6; ++k){out[k]=d[k];} // descriptor: cmd,PAid,w2,reqphys,respphys,flag
+		volatile TUint32* s=(volatile TUint32*)0xc670c400u;
+		for(TInt k=0; k<16; ++k){out[6+k]=s[k];} // shared +0x400 header
+		TUint32 reqp=out[3]; // reqbuf phys; read it if it's in the mapped shm window
+		if(reqp>=0x1ffe0000u && reqp<0x1fff0000u){
+			volatile TUint32* rb=(volatile TUint32*)(0xc6700000u+(reqp-0x1ffe0000u));
+			for(TInt k=0; k<16; ++k){out[22+k]=rb[k];} // reqbuf 0x40 bytes
+		}
+		TPtrC8 src((const TUint8*)out, sizeof(out));
+		Kern::ThreadDesWrite(&Kern::CurrentThread(), a1, src, 0);
+		return 1;
+	}
+
+	// EControlHookInstall: redirect securitykext's transport ptr (0xc800d1d8) to a
+	// hook trampoline in an exec page, so every secure request is logged to a ram
+	// ring. the hook reads the descriptor and bx's to the real stub (0x908e0001).
+	// runs in securitykext's thread with mmu on, so the exec page must be a GLOBAL
+	// kernel va (EMapAttrSupRwx, like RunBlob) - identity mappings wouldn't be
+	// visible in that context
+	if(aFunction==RRunBlob::EControlHookInstall){
+		if(gHookChunk){return KErrInUse;}
+		gHookRing=(TUint32*)Kern::Alloc(0x1000);
+		if(!gHookRing){return KErrNoMemory;}
+		for(TInt i=0; i<0x400; ++i){gHookRing[i]=0;} // ring[0]=index, entries at +0x20
+		TPhysAddr phys=0;
+		TInt r=Epoc::AllocPhysicalRam(0x1000, phys);
+		if(r!=KErrNone){Kern::Free(gHookRing); gHookRing=NULL; return r;}
+		r=DPlatChunkHw::New(gHookChunk, phys, 0x1000, EMapAttrSupRwx|EMapAttrFullyBlocking);
+		if(r!=KErrNone){Epoc::FreePhysicalRam(phys, 0x1000); Kern::Free(gHookRing); gHookRing=NULL; gHookChunk=NULL; return r;}
+		gHookLin=gHookChunk->LinearAddress();
+		TUint8* code=(TUint8*)gHookLin;
+		for(TUint i=0; i<KHookLen; ++i){code[i]=KHook[i];}
+		gHookOrig=*(volatile TUint32*)KTransportPtr; // save the real transport (0x908e0001)
+		*(volatile TUint32*)(gHookLin+KHookLen-8)=(TUint32)gHookRing; // patch ringva
+		*(volatile TUint32*)(gHookLin+KHookLen-4)=gHookOrig; // patch origstub
+		Cache::IMB_Range(gHookLin, KHookLen);
+		*(volatile TUint32*)KTransportPtr=(TUint32)gHookLin; // arm the hook (arm, even)
+		Dsb();
+		return KErrNone;
+	}
+
+	// EControlHookRead: copy the 0x1000-byte capture ring to a1
+	if(aFunction==RRunBlob::EControlHookRead){
+		if(!gHookRing){return KErrNotReady;}
+		TPtrC8 src((const TUint8*)gHookRing, 0x1000);
+		return Kern::ThreadDesWrite(&Kern::CurrentThread(), a1, src, 0);
+	}
+
+	// EControlHookRemove: restore the real transport ptr. we deliberately do NOT
+	// free the exec page/ring (an in-flight hooked call could still be running
+	// them); the small leak goes away on unload/reboot
+	if(aFunction==RRunBlob::EControlHookRemove){
+		if(!gHookChunk){return KErrNotReady;}
+		*(volatile TUint32*)KTransportPtr=gHookOrig;
+		Dsb();
+		gHookChunk=NULL; // keep the mapping alive, just forget it
+		return KErrNone;
+	}
+
 	// EControlReadPhys: map physical RAM at a1 (page aligned) and copy it to the
 	// user descriptor a2. used to read back the ramoops kernel log after a warm
 	// watchdog reset (phys 0x1f000000), so a hung linux leaves a readable log
@@ -521,6 +609,47 @@ TInt DRunBlobChan::Request(TInt aFunction, TAny* a1, TAny* a2){
 		Kern::Free(stage);
 		c->Close(NULL);
 		return r;
+	}
+
+	// EControlVirtInfo: superpage address + phys of a kernel virtual address
+	if(aFunction==RRunBlob::EControlVirtInfo){
+		TUint32 out[2];
+		out[0]=(TUint32)&Kern::SuperPage();
+		out[1]=(TUint32)Epoc::LinearToPhysical((TLinAddr)a1);
+		return Kern::ThreadRawWrite(&Kern::CurrentThread(), a2, out, sizeof(out));
+	}
+
+	// EControlReadVirt: copy kernel virtual memory (ram only) to the user
+	// descriptor a2. Kern::SafeRead per page so an unmapped page just comes
+	// back as 0xee. the c6 window is mmio except the 0x1ffe0000 ram block at
+	// c6700000, reading mmio there can kill the phone, so it's refused
+	if(aFunction==RRunBlob::EControlReadVirt){
+		TUint32 va=(TUint32)a1;
+		TInt maxlen=Kern::ThreadGetDesMaxLength(&Kern::CurrentThread(), a2);
+		if(maxlen<=0){return KErrArgument;}
+		TUint32 len=(TUint32)maxlen;
+		if(va+len<va){return KErrArgument;}
+		if(va<0xc7000000u && va+len>0xc6000000u &&
+		   !(va>=0xc6700000u && va+len<=0xc6710000u)){return KErrAccessDenied;}
+		TUint8* stage=(TUint8*)Kern::Alloc(0x1000);
+		if(!stage){return KErrNoMemory;}
+		TInt bad=0;
+		TInt r=KErrNone;
+		TUint32 done=0;
+		while(done<len){
+			TUint32 n=0x1000-((va+done)&0xfff);
+			if(n>len-done){n=len-done;}
+			if(Kern::SafeRead((const TAny*)(va+done), stage, (TInt)n)!=0){
+				for(TUint32 i=0; i<n; ++i){stage[i]=0xee;}
+				bad++;
+			}
+			TPtrC8 p8(stage, (TInt)n);
+			r=Kern::ThreadDesWrite(&Kern::CurrentThread(), a2, p8, (TInt)done);
+			if(r!=KErrNone){break;}
+			done+=n;
+		}
+		Kern::Free(stage);
+		return r!=KErrNone ? r : bad;
 	}
 
 	if(aFunction!=RRunBlob::EControlRunBlob){return KErrNotSupported;}

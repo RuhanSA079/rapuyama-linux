@@ -19,9 +19,8 @@ GLDEF_C TInt E32Main(){
 	b.Copy(_L8("takeover: started\n"));
 	log.Write(b); log.Flush();
 
-	_LIT(KLdd, "runblob.ldd");
 	User::FreeLogicalDevice(KRunBlobName);
-	TInt rLoad=User::LoadLogicalDevice(KLdd);
+	TInt rLoad=User::LoadLogicalDevice(KRunBlobLdd);
 	b.Format(_L8("LoadLogicalDevice=%d\n"), rLoad);
 	log.Write(b); log.Flush();
 

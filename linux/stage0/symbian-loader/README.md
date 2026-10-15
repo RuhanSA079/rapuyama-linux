@@ -29,8 +29,36 @@ driver includes. The build scripts run `make` themselves.
 | `Takeover` | ONE-WAY: mmu off, loop filling fb candidates | screen doesn't update (command-mode panel) |
 | `AllocBoot` / `LoadChunk` / `Boot` | zImage booter, see `../../boot/README.md` | built, blocked on watchdog + drivers |
 | `TimedDiff` | read A, spin, read B -> free-running counters | built, not run yet |
+| `SecureTrace` | one-way watchdog-fed loop; logs fast-counter gaps to reserved RAM | build/run below |
 
 ## Build
+Standalone apps (own package uid, exe, ldd and icon, they install side by side):
+```
+./build_app.sh all # out/e6boot.sis (boot_app.cpp) + out/e6logs.sis (ramread_app.cpp)
+./build_app.sh <6 char name> <app.cpp> <uid> # any other app the same way
+```
+Build the TrustZone-adjacent stall probe:
+```
+./build_app.sh e6tztr securetrace_app.cpp 0xe1000030
+```
+Install `out/e6tztr.sis` and `out/e6logs.sis`. Run `e6tztr`; the phone enters
+a bare-metal loop and will reset if the unexplained reset condition recurs.
+Start a stopwatch when launching `e6tztr`. After it returns to Symbian, run
+`e6logs` to save the 1 MiB RAM window as `E:\klog.bin`, then decode it on the
+host with the measured wall time (seconds):
+```
+python3 tools/parse_securetrace.py /path/to/klog.bin 123.4
+```
+The trace is at physical `0x1f080000`, inside the RAM-console reservation.
+It records the ARM security-extension feature field (`ID_PFR1`), entry
+`CPSR`/`SCTLR`, and a fast-counter sample about every 31 ms while feeding both
+known watchdogs. `ID_PFR1` reports that the CPU implements the extension; it
+does not reveal the current security world. Large internal gaps or a long
+unrecorded tail show that the non-secure loop stopped or was delayed; this is
+evidence to correlate with TrustZone, not proof of a secure interrupt or of a
+`PA_SWD` timeout. The run is one-way; if it is still running after five
+minutes, power-cycle the phone to recover and retrieve the log.
+Old way, every app as the same "ptdump" package (replace each other):
 ```
 ./build_wdfind.sh # or build_boot.sh / build_runblob.sh
 ```

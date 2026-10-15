@@ -55,6 +55,27 @@
 			reg = <0x1f000000 0x100000>;
 			no-map;
 		};
+
+		/* ram symbian maps in its 0xc6 hw window next to the mmio (unfiltered
+		 * sweep, logs/map (3).bin), so it's shared with something that isn't
+		 * the arm: modem / secure side (power.dll + secldd use 0x1ffe8000 and
+		 * 0x1ffec000). that something can keep writing after the jump, and
+		 * linux used to put its first allocations right there (memblock
+		 * hands out the top of ram first: vectors page, page tables). keep
+		 * off them. mach-rapuyama watches them and logs any page that changes.
+		 * NOT no-map: a no-map hole at the top of ram / off a 2 mb boundary
+		 * makes arm (no highmem) drop all ram above 0x11400000 -> oom */
+		shm@11525000 {
+			reg = <0x11525000 0x2000>;
+		};
+
+		shm@1f8b0000 {
+			reg = <0x1f8b0000 0x44d000>;
+		};
+
+		shm@1ffe0000 {
+			reg = <0x1ffe0000 0x20000>;
+		};
 	};
 
 	/* ULPI phy inside the Gazoo asic, symbian leaves it set up */
@@ -179,6 +200,16 @@
 		watchdog@20030700 {
 			compatible = "nokia,rapuyama-wdt";
 			reg = <0x20030700 0x40>, <0x200336c4 0x4>, <0x20033114 0x4>;
+		};
+
+		/* modem IRQ/status registers from karap.dll. off while the random
+		 * deaths are bisected: these writes go to the modem side and the
+		 * phone died with both versions, one variable at a time */
+		modem@20040280 {
+			compatible = "nokia,rapuyama-modem";
+			reg = <0x20040280 0x4>, <0x20040284 0x4>, <0x20040288 0x4>;
+			interrupts = <30>;
+			status = "disabled";
 		};
 
 		/* i2c0.dll: same regs, bits and scl formula as the TI OMAP i2c

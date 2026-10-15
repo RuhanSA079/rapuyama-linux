@@ -58,8 +58,7 @@ GLDEF_C TInt E32Main(){
 	L(_L8("boot: started\n"));
 
 	User::FreeLogicalDevice(KRunBlobName);
-	_LIT(KLdd, "runblob.ldd");
-	TInt rLoad=User::LoadLogicalDevice(KLdd);
+	TInt rLoad=User::LoadLogicalDevice(KRunBlobLdd);
 	Lf(_L8("LoadLogicalDevice=%d\n"), rLoad);
 	if(rLoad!=KErrNone && rLoad!=KErrAlreadyExists){gLog.Close(); gFs.Close(); return rLoad;}
 

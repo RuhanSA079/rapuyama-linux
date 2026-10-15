@@ -1,5 +1,7 @@
-/* e6.dts + the usb gadget (g_serial, console on ttyGS0 -> ttyACM0 on the pc).
- * boot with the usb cable plugged in so symbian has the usb block powered */
+/* e6.dts + the usb gadget (g_serial, shell on ttyGS0 -> ttyACM0 on the pc).
+ * boot with the usb cable plugged in so symbian has the usb block powered.
+ * no kernel console there: its backlog got echoed back by the pc tty into the
+ * shell (sh: missing ], stuck at ">"). dmesg -w in the shell instead */
 /include/ "e6.dts"
 
 &usb_otg {
@@ -8,6 +10,6 @@
 
 / {
 	chosen {
-		bootargs = "earlycon=ramcon,0x1f000000 keep_bootcon console=ttyGS0,115200 panic=10 nohlt e6.usbsh";
+		bootargs = "earlycon=ramcon,0x1f000000 keep_bootcon console=ttyNULL panic=10 nohlt e6.usbsh";
 	};
 };

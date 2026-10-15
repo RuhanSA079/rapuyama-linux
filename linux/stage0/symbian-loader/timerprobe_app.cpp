@@ -19,8 +19,7 @@ GLDEF_C TInt E32Main(){
 	log.Write(b); log.Flush();
 
 	User::FreeLogicalDevice(KRunBlobName);
-	_LIT(KLdd, "runblob.ldd");
-	TInt rLoad=User::LoadLogicalDevice(KLdd);
+	TInt rLoad=User::LoadLogicalDevice(KRunBlobLdd);
 	b.Format(_L8("Load=%d\n"), rLoad);
 	log.Write(b); log.Flush();
 

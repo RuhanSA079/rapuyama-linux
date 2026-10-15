@@ -18,7 +18,9 @@ LDFLAGS  = -nostdlib -T blob.lds
 all: blob.bin blob.hdr blob.dis stub2.hdr stub2.dis \
      tramp3.hdr tramp3.dis fakekern.hdr fakekern.dis \
      takeover.hdr takeover.dis tramp_boot.hdr tramp_boot.dis \
-     kickloop.hdr kickloop.dis
+     kickloop.hdr kickloop.dis securetrace.hdr securetrace.dis \
+     smcprobe.hdr smcprobe.dis \
+     hook.hdr hook.dis
 
 blob.o: blob.S
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -142,7 +144,11 @@ clean:
 	      tramp3.o tramp3.elf tramp3.bin tramp3.hdr tramp3.dis \
 	      fakekern.o fakekern.elf fakekern.bin fakekern.hdr fakekern.dis \
 	      takeover.o takeover.elf takeover.bin takeover.hdr takeover.dis \
-	      tramp_boot.o tramp_boot.elf tramp_boot.bin tramp_boot.hdr tramp_boot.dis
+	      tramp_boot.o tramp_boot.elf tramp_boot.bin tramp_boot.hdr tramp_boot.dis \
+	      kickloop.o kickloop.elf kickloop.bin kickloop.hdr kickloop.dis \
+	      securetrace.o securetrace.elf securetrace.bin securetrace.hdr securetrace.dis \
+	      smcprobe.o smcprobe.elf smcprobe.bin smcprobe.hdr smcprobe.dis \
+	      hook.o hook.elf hook.bin hook.hdr hook.dis
 
 .PHONY: all clean
 
@@ -162,4 +168,59 @@ kickloop.hdr: kickloop.bin
 	@od -An -v -tu1 kickloop.bin | sed 's/[0-9][0-9]*/&,/g; s/^/    /' >> $@
 	@printf '};\n' >> $@
 	@printf 'static const unsigned KKickLoopLen = sizeof(KKickLoop);\n' >> $@
+	@echo "wrote $@"
+
+# securetrace: watchdog-fed bare-metal loop with a fast-counter heartbeat log
+securetrace.o: securetrace.S
+	$(CC) $(CFLAGS) -c $< -o $@
+securetrace.elf: securetrace.o
+	$(LD) -nostdlib -Ttext 0 --entry securetrace securetrace.o -o $@
+securetrace.bin: securetrace.elf
+	$(OBJCOPY) -O binary $< $@
+	@echo "securetrace size: $$(wc -c < $@) bytes"
+securetrace.dis: securetrace.elf
+	$(OBJDUMP) -d $< > $@
+securetrace.hdr: securetrace.bin
+	@printf '// auto-generated from securetrace.bin -- do not edit\n' > $@
+	@printf 'static const unsigned char KSecureTrace[] = {\n' >> $@
+	@od -An -v -tu1 securetrace.bin | sed 's/[0-9][0-9]*/&,/g; s/^/    /' >> $@
+	@printf '};\n' >> $@
+	@printf 'static const unsigned KSecureTraceLen = sizeof(KSecureTrace);\n' >> $@
+	@echo "wrote $@"
+
+# smcprobe: one-way, mmu off, feeds the watchdogs then does one smc #0 and logs
+# whether the secure monitor returned (secure-call feasibility probe)
+smcprobe.o: smcprobe.S
+	$(CC) $(CFLAGS) -c $< -o $@
+smcprobe.elf: smcprobe.o
+	$(LD) -nostdlib -Ttext 0 --entry smcprobe smcprobe.o -o $@
+smcprobe.bin: smcprobe.elf
+	$(OBJCOPY) -O binary $< $@
+	@echo "smcprobe size: $$(wc -c < $@) bytes"
+smcprobe.dis: smcprobe.elf
+	$(OBJDUMP) -d $< > $@
+smcprobe.hdr: smcprobe.bin
+	@printf '// auto-generated from smcprobe.bin -- do not edit\n' > $@
+	@printf 'static const unsigned char KSmcProbe[] = {\n' >> $@
+	@od -An -v -tu1 smcprobe.bin | sed 's/[0-9][0-9]*/&,/g; s/^/    /' >> $@
+	@printf '};\n' >> $@
+	@printf 'static const unsigned KSmcProbeLen = sizeof(KSmcProbe);\n' >> $@
+	@echo "wrote $@"
+
+# hook: transport-fn trampoline that logs each secure request to a ram ring
+hook.o: hook.S
+	$(CC) $(CFLAGS) -c $< -o $@
+hook.elf: hook.o
+	$(LD) -nostdlib -Ttext 0 --entry hooktransport hook.o -o $@
+hook.bin: hook.elf
+	$(OBJCOPY) -O binary $< $@
+	@echo "hook size: $$(wc -c < $@) bytes"
+hook.dis: hook.elf
+	$(OBJDUMP) -d $< > $@
+hook.hdr: hook.bin
+	@printf '// auto-generated from hook.bin -- do not edit\n' > $@
+	@printf 'static const unsigned char KHook[] = {\n' >> $@
+	@od -An -v -tu1 hook.bin | sed 's/[0-9][0-9]*/&,/g; s/^/    /' >> $@
+	@printf '};\n' >> $@
+	@printf 'static const unsigned KHookLen = sizeof(KHook);\n' >> $@
 	@echo "wrote $@"

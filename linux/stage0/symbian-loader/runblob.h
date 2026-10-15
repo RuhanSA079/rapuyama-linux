@@ -7,7 +7,14 @@
 #include <e32std.h>
 #endif
 
-_LIT(KRunBlobName, "runblob");
+// device name + ldd file. build_app.sh gives every app its own (-DRB_NAME=
+// '"e6boot"'), so the apps install side by side instead of replacing each other
+#ifndef RB_NAME
+#define RB_NAME "runblob"
+#endif
+#define RB_LIT(n, s) _LIT(n, s)
+RB_LIT(KRunBlobName, RB_NAME);
+RB_LIT(KRunBlobLdd, RB_NAME ".ldd");
 
 // returned buffer = up to 32 words the blob wrote (sig/sum + cp15 cpu id)
 const TInt KRunBlobOutBytes=32*4;
@@ -46,7 +53,9 @@ class RRunBlob : public RBusLogicalChannel{
 		enum TControl{EControlRunBlob, EControlIdentityTest, EControlTrampTest,
 			EControlFullTramp, EControlFbFill, EControlTakeover,
 			EControlAllocBoot, EControlLoadChunk, EControlBoot,
-			EControlTimedDiff, EControlTimerProbe, EControlRegProbe, EControlRegWrite, EControlKickLoop, EControlReadPhys};
+			EControlTimedDiff, EControlTimerProbe, EControlRegProbe, EControlRegWrite, EControlKickLoop, EControlReadPhys,
+			EControlVirtInfo, EControlReadVirt, EControlSecureTrace, EControlSmcProbe,
+			EControlSnoopPoll, EControlHookInstall, EControlHookRead, EControlHookRemove};
 	#ifndef __KERNEL_MODE__
 		TInt Open(){return DoCreate(KRunBlobName, TVersion(1,0,0), KNullUnit, NULL, NULL);}
 		TInt Run(TDes8& aBuf){return DoControl(EControlRunBlob, (TAny*)&aBuf);}
@@ -88,6 +97,27 @@ class RRunBlob : public RBusLogicalChannel{
 		// forever from bare metal. never returns
 		TInt KickLoop(){return DoControl(EControlKickLoop, NULL);}
 
+		// ONE-WAY trace: watchdog-fed bare-metal loop with counter-gap log at
+		// phys 0x1f080000. Retrieve the 1 MiB RAM log with ramread after reset.
+		TInt SecureTrace(){return DoControl(EControlSecureTrace, NULL);}
+
+		// ONE-WAY secure-call feasibility probe: kill symbian, feed the watchdogs,
+		// issue one smc #0 and log to phys 0x1f080000 whether the monitor returned.
+		// read back with e6logs, parse with tools/parse_smcprobe.py
+		TInt SmcProbe(){return DoControl(EControlSmcProbe, NULL);}
+
+		// tight-poll securitykext's request descriptor to catch the transient
+		// secure request. aBuf gets 40 words (desc + shared header + reqbuf) when a
+		// request is caught. returns 1 = caught, 0 = idle this burst. read-only
+		TInt SnoopPoll(TDes8& aBuf, TUint32 aIters){return DoControl(EControlSnoopPoll, (TAny*)&aBuf, (TAny*)aIters);}
+
+		// redirect securitykext's transport fn to a logging trampoline so EVERY
+		// secure request is captured into a ram ring (no transient race). Read
+		// pulls the 0x1000-byte ring (ring[0]=count, entries of 7 words at +0x20).
+		TInt HookInstall(){return DoControl(EControlHookInstall, NULL);}
+		TInt HookRead(TDes8& aBuf){return DoControl(EControlHookRead, (TAny*)&aBuf);}
+		TInt HookRemove(){return DoControl(EControlHookRemove, NULL);}
+
 		// booter: alloc a contiguous boot chunk, stream zImage+dtb in, boot
 		TInt AllocBoot(TUint32 aSize, TUint32& aPhysOut){
 			return DoControl(EControlAllocBoot, (TAny*)&aSize, (TAny*)&aPhysOut);
@@ -128,6 +158,11 @@ class RRunBlob : public RBusLogicalChannel{
 
 		// maps physical RAM at aPhys (page aligned) and copies aBuf.MaxLength() bytes into aBuf
 		TInt ReadPhys(TUint32 aPhys, TDes8& aBuf){return DoControl(EControlReadPhys, (TAny*)aPhys, (TAny*)&aBuf);}
+		// aOut[0] = Kern::SuperPage(), aOut[1] = phys of aVirt (~0 = unmapped)
+		TInt VirtInfo(TUint32 aVirt, TUint32* aOut){return DoControl(EControlVirtInfo, (TAny*)aVirt, (TAny*)aOut);}
+		// copy aBuf.MaxLength() bytes of kernel virtual memory at aVirt. pages
+		// that don't read come back as 0xee, return = how many pages failed
+		TInt ReadVirt(TUint32 aVirt, TDes8& aBuf){return DoControl(EControlReadVirt, (TAny*)aVirt, (TAny*)&aBuf);}
 	#endif
 };
 

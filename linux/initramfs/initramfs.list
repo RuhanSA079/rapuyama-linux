@@ -9,3 +9,5 @@ file /bin/busybox /home/fluffles/Documents/Coding/other-projects/e6-linux/work/d
 slink /bin/sh busybox 777 0 0
 file /init /home/fluffles/Documents/Coding/other-projects/e6-linux/linux/initramfs/init.sh 755 0 0
 file /sbin/init /home/fluffles/Documents/Coding/other-projects/e6-linux/linux/initramfs/init 755 0 0
+file /bin/e6sh /home/fluffles/Documents/Coding/other-projects/e6-linux/linux/initramfs/e6sh.sh 755 0 0
+file /bin/keyscan /home/fluffles/Documents/Coding/other-projects/e6-linux/linux/initramfs/keyscan.sh 755 0 0

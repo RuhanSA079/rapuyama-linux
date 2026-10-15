@@ -26,7 +26,7 @@ log() { echo "e6: $*" > /dev/kmsg; }
 # the "alive" heartbeat is written by the kernel straight into ramcon now
 # (mach-rapuyama, every 10 s), so it no longer floods the console
 
-log "init.sh v4 (usb shell, reboot/poweroff)"
+log "init.sh v5 (usb shell waits for enter, reboot/poweroff)"
 
 # reboot / poweroff / halt typed in the shell: busybox signals pid 1 (TERM =
 # reboot, USR2 = poweroff, USR1 = halt), and pid 1 is this script. stop
@@ -76,12 +76,13 @@ usb_shell() {
 	log "usb configured, shell on ttyGS0"
 
 	# getty makes ttyGS0 the controlling tty, so ctrl-c and job control work.
-	# respawn: closing the terminal on the pc just gives a fresh shell
+	# respawn: closing the terminal on the pc just gives a fresh shell.
+	# e6sh waits for a plain Enter first, so pc side junk never hits sh
 	while true; do
 		if command -v getty >/dev/null; then
-			getty -n -l /bin/sh -L 115200 ttyGS0 vt100
+			getty -n -l /bin/e6sh -L 115200 ttyGS0 vt100
 		else
-			setsid sh -c 'exec sh </dev/ttyGS0 >/dev/ttyGS0 2>&1'
+			setsid sh -c 'exec /bin/e6sh </dev/ttyGS0 >/dev/ttyGS0 2>&1'
 		fi
 		sleep 1
 	done
