@@ -1,0 +1,5 @@
+/ {
+	chosen {
+		bootargs = "earlycon=rapuyama,0x20025a00,setup keep_bootcon console=tty0 panic=10 nohlt clk_ignore_unused pd_ignore_unused e6.usbsh e6.fbtest";
+	};
+};

@@ -1,0 +1,16 @@
+/*
+ * neutral-measurement variant of e6-vc.dts: nothing touches the modem so
+ * a run can be honestly attributed. only the two confirmed watchdogs are fed
+ * (keepalive mask 0x7 = SoC 0x200336c4 + PMIC 0x17 + PMIC 0x10), no sisa
+ * self-irq, no smc. pair N runs of this against N runs of plain e6-vc.dtb: if
+ * the survival distribution shifts, the modem is implicated even without the
+ * protocol
+ */
+
+/include/ "e6-vc.dts"
+
+/ {
+	chosen {
+		bootargs = "earlycon=ramcon,0x1f000000 keep_bootcon console=tty0 panic=10 nohlt clk_ignore_unused pd_ignore_unused e6.usbsh e6.fbtest irq_rapuyama.modem_link=0 irq_rapuyama.modem_capture=0 irq_rapuyama.modem_hs=0 rapuyama_modem.enable=0 rapuyama_keepalive.mask=0x7 rapuyama_theories.probe=0x5";
+	};
+};

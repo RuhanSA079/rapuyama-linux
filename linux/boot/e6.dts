@@ -6,7 +6,7 @@
  * drivers (karap/ekern/power.dll), see docs/driver-re.md. ram ends at
  * 0x20000000, everything from there up is mmio, NOT reserved dram like i thought
  * before. The booter leaves this fixed RAM range unchanged; the kernel is
- * configured with PHYS_OFFSET=0x10000000 to match it.
+ * configured with PHYS_OFFSET=0x11600000 to match it
  */
 
 / {
@@ -35,12 +35,22 @@
 		};
 	};
 
-	/* all 256 mb: symbian is dead after the jump. The kernel is linked with
-	 * PHYS_OFFSET=0x10000000 and the decompressor writes the Image at
-	 * 0x10008000, regardless of where the booter allocated the source chunk. */
-	memory@10000000 {
+	/* NOT all 256 mb: the bottom of ram belongs to the modem. the flash toc
+	 * (core image file 0x140000, entries {flash off, size, -, -, load phys,
+	 * name}) has nloader load the cellular firmware into dram:
+	 *   SOS*DSP0  -> 0x10200000 +0x280000 (bb5 header CDSP)
+	 *   SOS*ISASW -> 0x10480000 +0x300000 (bb5 header CMCU, the modem mcu sw)
+	 *   PRIMAPP/NPC/CCC/HWC/LDSP/GENIO_INIT... -> 0x108c0000..0x10900000
+	 * the modem runs from there for as long as the phone is on. with
+	 * PHYS_OFFSET=0x10000000 the decompressor wrote the Image over all of it
+	 * (0x10008000..0x11083820) -> the modem ran on until it hit bytes and
+	 * reset the soc, the random 50-210 s death. symbian maps 0x10480000 in its
+	 * hw window (c6200000), that was never a framebuffer.
+	 * so linux starts at 0x11600000: above all of that and above shm@11525000,
+	 * 2 mb aligned for ARM_PATCH_PHYS_VIRT. costs 22 mb */
+	memory@11600000 {
 		device_type = "memory";
-		reg = <0x10000000 0x10000000>;
+		reg = <0x11600000 0x0ea00000>;
 	};
 
 	/* RAM earlycon buffer (earlycon=ramcon,0x1f000000). linux writes all printk
@@ -64,11 +74,9 @@
 		 * hands out the top of ram first: vectors page, page tables). keep
 		 * off them. mach-rapuyama watches them and logs any page that changes.
 		 * NOT no-map: a no-map hole at the top of ram / off a 2 mb boundary
-		 * makes arm (no highmem) drop all ram above 0x11400000 -> oom */
-		shm@11525000 {
-			reg = <0x11525000 0x2000>;
-		};
-
+		 * makes arm (no highmem) drop all ram above 0x11400000 -> oom.
+		 * 0x11525000 +0x2000 is below PHYS_OFFSET now, outside linux ram, so
+		 * no node for it (a reserved node below PHYS_OFFSET breaks paging_init) */
 		shm@1f8b0000 {
 			reg = <0x1f8b0000 0x44d000>;
 		};
@@ -202,14 +210,19 @@
 			reg = <0x20030700 0x40>, <0x200336c4 0x4>, <0x20033114 0x4>;
 		};
 
-		/* modem IRQ/status registers from karap.dll. off while the random
-		 * deaths are bisected: these writes go to the modem side and the
-		 * phone died with both versions, one variable at a time */
-		modem@20040280 {
+		/* modem (CMT) link. drives the EM "awake" keepalive that stops the
+		 * random 50-210 s warm reset (rapuyama_modem.c). regs, in order:
+		 *   0 modem control region (swirq 0x280/4/8 + per-channel resets)
+		 *   1 TX byte FIFO (0x40100000 + chan*0x1000, ASIC send FUN_800beac8)
+		 *   2 send doorbell (0x401fd800, write channel number)
+		 *   3 clock controller (modem-interface bring-up, ecust FUN_800bede4)
+		 * line 30 is optional: the irqchip owns the INTC ack (modem_link=1) */
+		modem@20040000 {
 			compatible = "nokia,rapuyama-modem";
-			reg = <0x20040280 0x4>, <0x20040284 0x4>, <0x20040288 0x4>;
+			reg = <0x20040000 0x2000>, <0x40100000 0x1000>,
+			      <0x401fd800 0x4>, <0x20032000 0x2000>;
 			interrupts = <30>;
-			status = "disabled";
+			status = "okay";
 		};
 
 		/* i2c0.dll: same regs, bits and scl formula as the TI OMAP i2c

@@ -20,7 +20,9 @@ all: blob.bin blob.hdr blob.dis stub2.hdr stub2.dis \
      takeover.hdr takeover.dis tramp_boot.hdr tramp_boot.dis \
      kickloop.hdr kickloop.dis securetrace.hdr securetrace.dis \
      smcprobe.hdr smcprobe.dis \
-     hook.hdr hook.dis
+     hook.hdr hook.dis \
+     hook8494.hdr hook8494.dis \
+     hookbeac8.hdr hookbeac8.dis
 
 blob.o: blob.S
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -148,7 +150,8 @@ clean:
 	      kickloop.o kickloop.elf kickloop.bin kickloop.hdr kickloop.dis \
 	      securetrace.o securetrace.elf securetrace.bin securetrace.hdr securetrace.dis \
 	      smcprobe.o smcprobe.elf smcprobe.bin smcprobe.hdr smcprobe.dis \
-	      hook.o hook.elf hook.bin hook.hdr hook.dis
+	      hook.o hook.elf hook.bin hook.hdr hook.dis \
+	      hook8494.o hook8494.elf hook8494.bin hook8494.hdr hook8494.dis
 
 .PHONY: all clean
 
@@ -223,4 +226,39 @@ hook.hdr: hook.bin
 	@od -An -v -tu1 hook.bin | sed 's/[0-9][0-9]*/&,/g; s/^/    /' >> $@
 	@printf '};\n' >> $@
 	@printf 'static const unsigned KHookLen = sizeof(KHook);\n' >> $@
+	@echo "wrote $@"
+# hook8494: trampoline for patching karap FUN_800b8494 (cbus write logger)
+hook8494.o: hook8494.S
+	$(CC) $(CFLAGS) -c $< -o $@
+hook8494.elf: hook8494.o
+	$(LD) -nostdlib -Ttext 0 --entry hook8494 hook8494.o -o $@
+hook8494.bin: hook8494.elf
+	$(OBJCOPY) -O binary $< $@
+	@echo "hook8494 size: $$(wc -c < $@) bytes"
+hook8494.dis: hook8494.elf
+	$(OBJDUMP) -d $< > $@
+hook8494.hdr: hook8494.bin
+	@printf '// auto-generated from hook8494.bin -- do not edit\n' > $@
+	@printf 'static const unsigned char KHook8494[] = {\n' >> $@
+	@od -An -v -tu1 hook8494.bin | sed 's/[0-9][0-9]*/&,/g; s/^/    /' >> $@
+	@printf '};\n' >> $@
+	@printf 'static const unsigned KHook8494Len = sizeof(KHook8494);\n' >> $@
+	@echo "wrote $@"
+
+# hookbeac8: trampoline for patching ASIC send FUN_800beac8 (modem TX logger)
+hookbeac8.o: hookbeac8.S
+	$(CC) $(CFLAGS) -c $< -o $@
+hookbeac8.elf: hookbeac8.o
+	$(LD) -nostdlib -Ttext 0 --entry hookbeac8 hookbeac8.o -o $@
+hookbeac8.bin: hookbeac8.elf
+	$(OBJCOPY) -O binary $< $@
+	@echo "hookbeac8 size: $$(wc -c < $@) bytes"
+hookbeac8.dis: hookbeac8.elf
+	$(OBJDUMP) -d $< > $@
+hookbeac8.hdr: hookbeac8.bin
+	@printf '// auto-generated from hookbeac8.bin -- do not edit\n' > $@
+	@printf 'static const unsigned char KHookBeac8[] = {\n' >> $@
+	@od -An -v -tu1 hookbeac8.bin | sed 's/[0-9][0-9]*/&,/g; s/^/    /' >> $@
+	@printf '};\n' >> $@
+	@printf 'static const unsigned KHookBeac8Len = sizeof(KHookBeac8);\n' >> $@
 	@echo "wrote $@"

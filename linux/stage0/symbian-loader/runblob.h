@@ -55,7 +55,10 @@ class RRunBlob : public RBusLogicalChannel{
 			EControlAllocBoot, EControlLoadChunk, EControlBoot,
 			EControlTimedDiff, EControlTimerProbe, EControlRegProbe, EControlRegWrite, EControlKickLoop, EControlReadPhys,
 			EControlVirtInfo, EControlReadVirt, EControlSecureTrace, EControlSmcProbe,
-			EControlSnoopPoll, EControlHookInstall, EControlHookRead, EControlHookRemove};
+			EControlSnoopPoll, EControlHookInstall, EControlHookRead, EControlHookRemove,
+			EControlHookCbus, EControlHookCbusRead, EControlHookCbusRemove,
+			EControlModemReset, EControlPeek,
+			EControlHookBeac8, EControlHookBeac8Read, EControlHookBeac8Remove};
 	#ifndef __KERNEL_MODE__
 		TInt Open(){return DoCreate(KRunBlobName, TVersion(1,0,0), KNullUnit, NULL, NULL);}
 		TInt Run(TDes8& aBuf){return DoControl(EControlRunBlob, (TAny*)&aBuf);}
@@ -117,6 +120,30 @@ class RRunBlob : public RBusLogicalChannel{
 		TInt HookInstall(){return DoControl(EControlHookInstall, NULL);}
 		TInt HookRead(TDes8& aBuf){return DoControl(EControlHookRead, (TAny*)&aBuf);}
 		TInt HookRemove(){return DoControl(EControlHookRemove, NULL);}
+
+		// call Symbian's own SisaResetGenerate (0x801039e0) to reset/quiesce the
+		// modem via the firmware's real sequence, while Symbian is still alive.
+		// aType must have bit 0x80 set (0x80|resettype). returns 0.
+		TInt ModemReset(TUint32 aType){return DoControl(EControlModemReset, (TAny*)aType);}
+
+		// read ONE 32-bit mmio register at phys aPhys through a fresh UNCACHED
+		// (device) mapping, so polling sees live changes (ReadPhys is cached =
+		// stale for mmio). for watching the modem/ISA keepalive register.
+		TInt Peek(TUint32 aPhys, TUint32* aOut){return DoControl(EControlPeek, (TAny*)aPhys, (TAny*)aOut);}
+
+		// hook the ASIC modem TX send FUN_800beac8 (0x800beac8): log {descriptor,
+		// channel, word0} of every message Symbian writes to the modem TX FIFO.
+		// catches the exact EM (resource 0xA9) sleep/awake bytes to replay in Linux.
+		TInt HookBeac8(){return DoControl(EControlHookBeac8, NULL);}
+		TInt HookBeac8Read(TDes8& aBuf){return DoControl(EControlHookBeac8Read, (TAny*)&aBuf);}
+		TInt HookBeac8Remove(){return DoControl(EControlHookBeac8Remove, NULL);}
+
+		// patch karap's cbus-write fn 0x800b8494 to log every PMIC/CBUS write
+		// {dev,reg,val} into a ram ring (ring[0]=count, 16-byte slots at +4).
+		// catches any hidden periodic pet done over cbus. returns 0 or <0.
+		TInt HookCbus(){return DoControl(EControlHookCbus, NULL);}
+		TInt HookCbusRead(TDes8& aBuf){return DoControl(EControlHookCbusRead, (TAny*)&aBuf);}
+		TInt HookCbusRemove(){return DoControl(EControlHookCbusRemove, NULL);}
 
 		// booter: alloc a contiguous boot chunk, stream zImage+dtb in, boot
 		TInt AllocBoot(TUint32 aSize, TUint32& aPhysOut){

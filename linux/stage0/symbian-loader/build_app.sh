@@ -48,6 +48,7 @@ INC=(
   -I"$STAGE/memmodel" -I"$STAGE/memmodel/epoc"
   -I"$EKA/compsupp/gcce" -I"$EKA/compsupp/symcpp"
   -I"$KH/userlibandfileserver/fileserver/inc"
+  -I"$ROOT/symbian/FCL.sf.incubator.modemadaptation/connectivitylayer/isce/iscapi_dll/inc"
   -I"$OUT"
 )
 echo "" > "$OUT/variant_dummy.h"
@@ -81,7 +82,7 @@ $LD "${LDFLAGS[@]}" --entry _E32Dll -u _E32Dll \
     --definput="$DRV/ptdump.def" --dlldata --compressionmethod=none --capability=all
 $LD "${LDFLAGS[@]}" --entry _E32Startup -u _E32Startup \
     "$OUT/app.o" "$OUT/uc_exe.o" "$OUT/uc_exe_cia.o" \
-    "$DRV/import/EUSER.dso" "$DRV/import/EFSRV.dso" "$LIBGCC" -o "$OUT/app.elf"
+    "$DRV/import/EUSER.dso" "$DRV/import/EFSRV.dso" "$DRV/import/iscapi.dso" "$LIBGCC" -o "$OUT/app.elf"
 "$E2E" --elfinput="$OUT/app.elf" --output="$OUT/${NAME}_0x$UHEX.exe" \
     --targettype=EXE --uid1=0x1000007a --uid2=0x100039ce --uid3="$UID3" \
     --linkas="${NAME}_0x$UHEX{000a0000}[$UHEX].exe" --libpath="$DRV/import" \

@@ -64,7 +64,7 @@ and the public Symbian sources only have reference baseports (beagleboard, navie
   So `Kern::Printf` goes to ram here, no reachable hardware uart with symbian up.
 - the unfiltered `0xc0000000`-`0xc8000000` sweep (`logs/map (2).bin`, `logs/map (3).bin`,
   17 runs) only added ram-backed pages to the table above: the `0x20xxxxxx` reserve,
-  `c6200000` -> `0x10480000` (4 MB, the framebuffer), `c6800000` -> `0x1f8b0000` (4.3 MB),
+  `c6200000` -> `0x10480000` (4 MB, NOT the framebuffer: the modem's `SOS*ISASW` firmware, see `modem-port-handoff.md` 17.10), `c6800000` -> `0x1f8b0000` (4.3 MB),
   `c60f0000` -> `0x11525000`, `c6700000` -> `0x1ffe0000`. no hidden mmio there.
 
 ## Unsafe reads
@@ -78,8 +78,9 @@ and the public Symbian sources only have reference baseports (beagleboard, navie
 E6 display = **Broadcom BCM2727B1 (VideoCore III)**,
 driven via DISPMANX over VCHI on MPHI/CCP2 (`vcdispman*`, `vcdispmanvchi.dll`,
 `dispcommanddrv.dll`, `display_chipset_drv_ive_bc.dll`). The VideoCore firmware is
-inside the Nokia core-bin and runs on its own. The framebuffer is at phys
-**`0x10480000`** (fill test flashed the screen while symbian was alive). The panel is
+inside the Nokia core-bin and runs on its own. ~~The framebuffer is at phys
+**`0x10480000`**~~ (17.10: wrong, `0x10200000..0x10780000` is the modem dsp + mcu
+firmware nloader loads into our dram, the fill test wrote over the running modem). The panel is
 command-mode: once symbian is dead nobody triggers frames, so writing the fb
 shows nothing (`Takeover` confirmed that it does not refresh after the handoff).
 Drawing from Linux requires a working VCHI/DispmanX client. Raspberry Pi VCHI

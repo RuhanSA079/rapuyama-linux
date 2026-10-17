@@ -20,6 +20,8 @@
 #include "securetrace.hdr" // KSecureTrace[], KSecureTraceLen (counter-gap trace)
 #include "smcprobe.hdr" // KSmcProbe[], KSmcProbeLen (secure-call feasibility probe)
 #include "hook.hdr" // KHook[], KHookLen (transport-fn capture trampoline)
+#include "hook8494.hdr" // KHook8494[], KHook8494Len (cbus-write logger trampoline)
+#include "hookbeac8.hdr" // KHookBeac8[], KHookBeac8Len (modem TX send logger trampoline)
 
 // securitykext monitor-call transport pointer = channel object 0xc800d1c4 + 0x14
 // (confirmed live by e6secs). hooking it captures every secure request.
@@ -28,6 +30,22 @@ static DPlatChunkHw* gHookChunk=NULL; // persistent exec page holding the hook
 static TUint32* gHookRing=NULL; // capture ring (kernel heap)
 static TUint32 gHookOrig=0; // saved original transport ptr (0x908e0001)
 static TLinAddr gHookLin=0; // hook code global va
+
+// cbus-write hook: patch karap FUN_800b8494 (0x800b8494) to log every pmic write
+static const TUint32 KCbusFn=0x800b8494u;
+static DPlatChunkHw* gCbusChunk=NULL; // exec page for the trampoline
+static TUint32* gCbusRing=NULL; // log ring
+static TUint32 gCbusOrig0=0, gCbusOrig1=0; // saved original 2 instructions
+static TLinAddr gCbusLin=0;
+
+// modem TX send hook: patch ASIC send FUN_800beac8 (0x800beac8) to log every
+// message Symbian writes to the modem TX FIFO (phys 0x40100000) = the exact EM
+// (resource 0xA9) sleep/awake bytes we need to replay from Linux.
+static const TUint32 KBeac8Fn=0x800beac8u;
+static DPlatChunkHw* gBeac8Chunk=NULL;
+static TUint32* gBeac8Ring=NULL;
+static TUint32 gBeac8Orig0=0, gBeac8Orig1=0;
+static TLinAddr gBeac8Lin=0;
 
 typedef TInt (*TStubFn)(TUint32 aMarkerPhys, TUint32 aVal);
 typedef void (*TVoidFn)(void);
@@ -43,6 +61,62 @@ static void CleanDCacheMVA(TLinAddr a){asm volatile("mcr p15,0,%0,c7,c10,1"::"r"
 static void Dsb(){asm volatile("mcr p15,0,%0,c7,c10,4"::"r"(0));}
 static void InvTlbAll(){asm volatile("mcr p15,0,%0,c8,c7,0"::"r"(0));}
 static void Isb(){asm volatile("mcr p15,0,%0,c7,c5,4"::"r"(0));}
+// va -> pa with the current tables (privileged read), returns the PAR
+static TUint32 Va2Pa(TUint32 aVa){
+	TUint32 p;
+	asm volatile("mcr p15,0,%1,c7,c8,0\n\tmcr p15,0,%2,c7,c5,4\n\tmrc p15,0,%0,c7,c4,0":"=r"(p):"r"(aVa), "r"(0));
+	return p;
+}
+
+// isasw handoff: the modem sw runs on our cpu through the karap irq hooks
+// (c8004068), linux has to host it. the hook addresses + the mmu setup they
+// run under only exist in live symbian, so the booter saves them right before
+// the jump. phys 0x1f0f1000 +0x5000, inside the ramcon no-map reservation:
+// ramcon ends at 0x1f0f0008, the flight recorder starts at 0x1f0f8000
+const TUint32 KIsaHandoffPhys=0x1f0f1000;
+const TInt KIsaHandoffSz=0x5000;
+const TUint32 KIsaMagic=0x48415349; // 'ISAH'
+const TUint32 KKarapIsaCb=0xc8004068; // karap hook table, 6 words
+const TUint32 KSisaObj=0xc800a6e0; // sisa_wrapper object, +8 = isasw object
+static void SafeCopy(volatile TUint32* aDst, TUint32 aSrc, TInt aBytes){
+	TUint32 tmp[64];
+	for(TInt o=0; o<aBytes; o+=sizeof(tmp)){
+		TInt n=aBytes-o; if(n>(TInt)sizeof(tmp)){n=sizeof(tmp);}
+		if(Kern::SafeRead((const TAny*)(aSrc+o), tmp, n)){for(TInt i=0; i<n/4; ++i){tmp[i]=0xdeadbeef;}}
+		for(TInt i=0; i<n/4; ++i){aDst[o/4+i]=tmp[i];}
+	}
+}
+// layout (words): 0 magic, 1 version, 2 ttbr0, 3 ttbr1, 4 ttbcr, 5 dacr,
+// 6 contextidr, 7 sctlr, 8 prrr, 9 nmrr, 0x10.. cb[0..5], 0x18 isasw obj ptr,
+// 0x20..0x5f isasw obj (0x100 b), 0x60..0x9f sisa obj c800a6e0 (0x100 b),
+// 0xa0 superpage, 0xa1 imachinedata, 0xb0..0xef imachinedata (0x100 b),
+// 0xf0..0xf7 pa of cb[0..5] + obj, 0x400.. (byte 0x1000) the 16 kb kernel L1
+static void SaveIsaHandoff(volatile TUint32* h){
+	TUint32 v;
+	asm volatile("mrc p15,0,%0,c2,c0,0":"=r"(v)); h[2]=v;
+	asm volatile("mrc p15,0,%0,c2,c0,1":"=r"(v)); h[3]=v;
+	asm volatile("mrc p15,0,%0,c2,c0,2":"=r"(v)); h[4]=v;
+	asm volatile("mrc p15,0,%0,c3,c0,0":"=r"(v)); h[5]=v;
+	asm volatile("mrc p15,0,%0,c13,c0,1":"=r"(v)); h[6]=v;
+	asm volatile("mrc p15,0,%0,c1,c0,0":"=r"(v)); h[7]=v;
+	asm volatile("mrc p15,0,%0,c10,c2,0":"=r"(v)); h[8]=v;
+	asm volatile("mrc p15,0,%0,c10,c2,1":"=r"(v)); h[9]=v;
+	SafeCopy(h+0x10, KKarapIsaCb, 0x18);
+	SafeCopy(h+0x18, KSisaObj+8, 4);
+	SafeCopy(h+0x20, h[0x18], 0x100);
+	SafeCopy(h+0x60, KSisaObj, 0x100);
+	TUint32 sp=(TUint32)&Kern::SuperPage();
+	h[0xa0]=sp;
+	SafeCopy(h+0xa1, sp+0x2c, 4);
+	SafeCopy(h+0xb0, h[0xa1], 0x100);
+	for(TInt i=0; i<6; ++i){h[0xf0+i]=Va2Pa(h[0x10+i]);}
+	h[0xf6]=Va2Pa(h[0x18]);
+	TUint32 pd=0;
+	SafeCopy(&pd, sp+0xc, 4); // iPageDir
+	SafeCopy(h+0x400, pd, 0x4000);
+	h[1]=1;
+	h[0]=KIsaMagic; // last, so a half-written block never looks valid
+}
 
 // identity-maps a 1 mb section covering phys aP as normal executable in TTBR0.
 // returns the L1 chunk (close it later) + index + old descriptor, or NULL
@@ -423,9 +497,15 @@ TInt DRunBlobChan::Request(TInt aFunction, TAny* a1, TAny* a2){
 		if(!cl){sc->Close(NULL); Epoc::FreePhysicalRam(sp, KSec); return KErrGeneral;}
 		Cache::IMB_Range((TLinAddr)sp, KTrampBootLen);
 
+		// isasw handoff page, uncached so the mmu-off kernel sees it. mapped now,
+		// filled with irqs off (symbian may own that ram until it dies)
+		DPlatChunkHw* hc=NULL;
+		if(DPlatChunkHw::New(hc, KIsaHandoffPhys, KIsaHandoffSz, EMapAttrSupRw|EMapAttrFullyBlocking)!=KErrNone){hc=NULL;}
+
 		// last things while the c6 window is still mapped. irqs off so no symbian
 		// code runs after this (the bt stack would gate the uart again)
 		NKern::DisableAllInterrupts();
+		if(hc){SaveIsaHandoff((volatile TUint32*)hc->LinearAddress()); Dsb();}
 		PrepareHw();
 
 		TBootFn fn=(TBootFn)sp;
@@ -579,6 +659,158 @@ TInt DRunBlobChan::Request(TInt aFunction, TAny* a1, TAny* a2){
 		return KErrNone;
 	}
 
+	// EControlHookCbus: patch karap's cbus-write fn 0x800b8494 so every PMIC write
+	// is logged to a ram ring. overwrites its first 2 instrs with ldr pc,[pc,#-4]
+	// + trampoline addr; the trampoline (hook8494.S) logs {dev,reg,val}, runs the
+	// 2 relocated instrs, returns to 0x800b849c. this is the definitive catch for
+	// a hidden periodic pet done over cbus. patches live kernel rom (risky)
+	if(aFunction==RRunBlob::EControlHookCbus){
+		if(gCbusChunk){return KErrInUse;}
+		gCbusRing=(TUint32*)Kern::Alloc(0x1000);
+		if(!gCbusRing){return KErrNoMemory;}
+		for(TInt i=0; i<0x400; ++i){gCbusRing[i]=0;}
+		TPhysAddr ep=0;
+		TInt r=Epoc::AllocPhysicalRam(0x1000, ep);
+		if(r!=KErrNone){Kern::Free(gCbusRing); gCbusRing=NULL; return r;}
+		r=DPlatChunkHw::New(gCbusChunk, ep, 0x1000, EMapAttrSupRwx|EMapAttrFullyBlocking);
+		if(r!=KErrNone){Epoc::FreePhysicalRam(ep, 0x1000); Kern::Free(gCbusRing); gCbusRing=NULL; gCbusChunk=NULL; return r;}
+		gCbusLin=gCbusChunk->LinearAddress();
+		TUint8* code=(TUint8*)gCbusLin;
+		for(TUint i=0; i<KHook8494Len; ++i){code[i]=KHook8494[i];}
+		*(volatile TUint32*)(gCbusLin+KHook8494Len-8)=(TUint32)gCbusRing; // patch ringptr
+		Cache::IMB_Range(gCbusLin, KHook8494Len);
+		// map the rom page writable and patch 0x800b8494
+		TPhysAddr rp=Epoc::LinearToPhysical(KCbusFn);
+		if(rp==KPhysAddrInvalid){
+			gCbusChunk->Close(NULL); gCbusChunk=NULL; Epoc::FreePhysicalRam(ep, 0x1000);
+			Kern::Free(gCbusRing); gCbusRing=NULL; return KErrNotFound;
+		}
+		DPlatChunkHw* romw=NULL;
+		r=DPlatChunkHw::New(romw, rp&~0xfffu, 0x1000, EMapAttrSupRw|EMapAttrFullyBlocking);
+		if(r!=KErrNone){
+			gCbusChunk->Close(NULL); gCbusChunk=NULL; Epoc::FreePhysicalRam(ep, 0x1000);
+			Kern::Free(gCbusRing); gCbusRing=NULL; return r;
+		}
+		volatile TUint32* w=(volatile TUint32*)(romw->LinearAddress()+(KCbusFn&0xfffu));
+		gCbusOrig0=w[0]; gCbusOrig1=w[1];
+		w[1]=(TUint32)gCbusLin; Dsb(); // target first, so the ldr-pc always sees it
+		w[0]=0xe51ff004u; Dsb(); // ldr pc,[pc,#-4]
+		TUint32 chk=w[0];
+		if(chk!=0xe51ff004u){ w[0]=gCbusOrig0; w[1]=gCbusOrig1; Dsb(); } // rom not writable: undo
+		romw->Close(NULL);
+		Cache::IMB_Range(KCbusFn, 8); Dsb(); Isb();
+		if(chk!=0xe51ff004u){
+			gCbusChunk->Close(NULL); gCbusChunk=NULL; Epoc::FreePhysicalRam(ep, 0x1000);
+			Kern::Free(gCbusRing); gCbusRing=NULL; return KErrAccessDenied;
+		}
+		return KErrNone;
+	}
+
+	// EControlHookCbusRead: copy the 0x1000-byte cbus log ring to a1
+	if(aFunction==RRunBlob::EControlHookCbusRead){
+		if(!gCbusRing){return KErrNotReady;}
+		TPtrC8 src((const TUint8*)gCbusRing, 0x1000);
+		return Kern::ThreadDesWrite(&Kern::CurrentThread(), a1, src, 0);
+	}
+
+	// EControlHookCbusRemove: restore the original 2 instructions at 0x800b8494
+	if(aFunction==RRunBlob::EControlHookCbusRemove){
+		if(!gCbusChunk){return KErrNotReady;}
+		TPhysAddr rp=Epoc::LinearToPhysical(KCbusFn);
+		if(rp!=KPhysAddrInvalid){
+			DPlatChunkHw* romw=NULL;
+			if(DPlatChunkHw::New(romw, rp&~0xfffu, 0x1000, EMapAttrSupRw|EMapAttrFullyBlocking)==KErrNone){
+				volatile TUint32* w=(volatile TUint32*)(romw->LinearAddress()+(KCbusFn&0xfffu));
+				w[1]=gCbusOrig1; Dsb(); // restore 2nd instr first
+				w[0]=gCbusOrig0; Dsb(); // then disarm the ldr-pc
+				romw->Close(NULL);
+				Cache::IMB_Range(KCbusFn, 8); Dsb(); Isb();
+			}
+		}
+		gCbusChunk=NULL; // keep the exec page (an in-flight call may still run it)
+		return KErrNone;
+	}
+
+	// EControlHookBeac8: patch ASIC send FUN_800beac8 (0x800beac8) so every modem
+	// TX FIFO send is logged {descptr, channel, descword0} to a ram ring. same
+	// mechanism as the cbus hook. this is the GROUND TRUTH for what Symbian sends
+	// the modem over the ASIC byte-FIFO (0x40100000) - settles FIFO vs mailbox.
+	if(aFunction==RRunBlob::EControlHookBeac8){
+		if(gBeac8Chunk){return KErrInUse;}
+		gBeac8Ring=(TUint32*)Kern::Alloc(0x1000);
+		if(!gBeac8Ring){return KErrNoMemory;}
+		for(TInt i=0; i<0x400; ++i){gBeac8Ring[i]=0;}
+		TPhysAddr ep=0;
+		TInt r=Epoc::AllocPhysicalRam(0x1000, ep);
+		if(r!=KErrNone){Kern::Free(gBeac8Ring); gBeac8Ring=NULL; return r;}
+		r=DPlatChunkHw::New(gBeac8Chunk, ep, 0x1000, EMapAttrSupRwx|EMapAttrFullyBlocking);
+		if(r!=KErrNone){Epoc::FreePhysicalRam(ep, 0x1000); Kern::Free(gBeac8Ring); gBeac8Ring=NULL; gBeac8Chunk=NULL; return r;}
+		gBeac8Lin=gBeac8Chunk->LinearAddress();
+		TUint8* code=(TUint8*)gBeac8Lin;
+		for(TUint i=0; i<KHookBeac8Len; ++i){code[i]=KHookBeac8[i];}
+		*(volatile TUint32*)(gBeac8Lin+KHookBeac8Len-8)=(TUint32)gBeac8Ring; // patch ringptr
+		Cache::IMB_Range(gBeac8Lin, KHookBeac8Len);
+		TPhysAddr rp=Epoc::LinearToPhysical(KBeac8Fn);
+		if(rp==KPhysAddrInvalid){
+			gBeac8Chunk->Close(NULL); gBeac8Chunk=NULL; Epoc::FreePhysicalRam(ep, 0x1000);
+			Kern::Free(gBeac8Ring); gBeac8Ring=NULL; return KErrNotFound;
+		}
+		DPlatChunkHw* romw=NULL;
+		r=DPlatChunkHw::New(romw, rp&~0xfffu, 0x1000, EMapAttrSupRw|EMapAttrFullyBlocking);
+		if(r!=KErrNone){
+			gBeac8Chunk->Close(NULL); gBeac8Chunk=NULL; Epoc::FreePhysicalRam(ep, 0x1000);
+			Kern::Free(gBeac8Ring); gBeac8Ring=NULL; return r;
+		}
+		volatile TUint32* w=(volatile TUint32*)(romw->LinearAddress()+(KBeac8Fn&0xfffu));
+		gBeac8Orig0=w[0]; gBeac8Orig1=w[1];
+		w[1]=(TUint32)gBeac8Lin; Dsb(); // target first, so the ldr-pc always sees it
+		w[0]=0xe51ff004u; Dsb(); // ldr pc,[pc,#-4]
+		TUint32 chk=w[0];
+		if(chk!=0xe51ff004u){ w[0]=gBeac8Orig0; w[1]=gBeac8Orig1; Dsb(); } // rom not writable: undo
+		romw->Close(NULL);
+		Cache::IMB_Range(KBeac8Fn, 8); Dsb(); Isb();
+		if(chk!=0xe51ff004u){
+			gBeac8Chunk->Close(NULL); gBeac8Chunk=NULL; Epoc::FreePhysicalRam(ep, 0x1000);
+			Kern::Free(gBeac8Ring); gBeac8Ring=NULL; return KErrAccessDenied;
+		}
+		return KErrNone;
+	}
+
+	// EControlHookBeac8Read: copy the 0x1000-byte modem-TX log ring to a1
+	if(aFunction==RRunBlob::EControlHookBeac8Read){
+		if(!gBeac8Ring){return KErrNotReady;}
+		TPtrC8 src((const TUint8*)gBeac8Ring, 0x1000);
+		return Kern::ThreadDesWrite(&Kern::CurrentThread(), a1, src, 0);
+	}
+
+	// EControlHookBeac8Remove: restore the original 2 instructions at 0x800beac8
+	if(aFunction==RRunBlob::EControlHookBeac8Remove){
+		if(!gBeac8Chunk){return KErrNotReady;}
+		TPhysAddr rp=Epoc::LinearToPhysical(KBeac8Fn);
+		if(rp!=KPhysAddrInvalid){
+			DPlatChunkHw* romw=NULL;
+			if(DPlatChunkHw::New(romw, rp&~0xfffu, 0x1000, EMapAttrSupRw|EMapAttrFullyBlocking)==KErrNone){
+				volatile TUint32* w=(volatile TUint32*)(romw->LinearAddress()+(KBeac8Fn&0xfffu));
+				w[1]=gBeac8Orig1; Dsb(); // restore 2nd instr first
+				w[0]=gBeac8Orig0; Dsb(); // then disarm the ldr-pc
+				romw->Close(NULL);
+				Cache::IMB_Range(KBeac8Fn, 8); Dsb(); Isb();
+			}
+		}
+		gBeac8Chunk=NULL; // keep the exec page (an in-flight call may still run it)
+		return KErrNone;
+	}
+
+	// EControlModemReset: call Symbian's SisaResetGenerate(0x801039e0) with a1 as
+	// the reset type (0x80|type). runs the firmware's real modem-reset sequence
+	// while Symbian is alive; it queues a DFC, so the caller should sleep after.
+	if(aFunction==RRunBlob::EControlModemReset){
+		typedef void (*TSisaReset)(TUint32);
+		TSisaReset fn=(TSisaReset)0x801039e0u;
+		fn((TUint32)a1);
+		return KErrNone;
+	}
+
 	// EControlReadPhys: map physical RAM at a1 (page aligned) and copy it to the
 	// user descriptor a2. used to read back the ramoops kernel log after a warm
 	// watchdog reset (phys 0x1f000000), so a hung linux leaves a readable log
@@ -609,6 +841,23 @@ TInt DRunBlobChan::Request(TInt aFunction, TAny* a1, TAny* a2){
 		Kern::Free(stage);
 		c->Close(NULL);
 		return r;
+	}
+
+	// EControlPeek: read ONE 32-bit mmio word at phys a1 through a fresh UNCACHED
+	// (EMapAttrFullyBlocking = device/strongly-ordered) mapping, so each poll sees
+	// the live register (cached ReadPhys would return a stale first value for
+	// mmio). write the word to *a2. for watching the modem/ISA keepalive register.
+	if(aFunction==RRunBlob::EControlPeek){
+		TUint32 phys=(TUint32)a1;
+		TUint32 base=phys&~0xfffu;
+		TUint32 off=phys&0xfff;
+		DPlatChunkHw* c=NULL;
+		TInt r=DPlatChunkHw::New(c, base, 0x1000, EMapAttrSupRw|EMapAttrFullyBlocking);
+		if(r!=KErrNone){return r;}
+		volatile TUint32* reg=(volatile TUint32*)(c->LinearAddress()+off);
+		TUint32 val=*reg;
+		c->Close(NULL);
+		return Kern::ThreadRawWrite(&Kern::CurrentThread(), a2, &val, sizeof(val));
 	}
 
 	// EControlVirtInfo: superpage address + phys of a kernel virtual address

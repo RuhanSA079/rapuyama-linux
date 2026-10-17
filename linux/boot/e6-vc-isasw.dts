@@ -1,0 +1,7 @@
+/include/ "e6-vc.dts"
+
+/ {
+	chosen {
+		bootargs = "earlycon=ramcon,0x1f000000 keep_bootcon console=tty0 panic=10 nohlt clk_ignore_unused pd_ignore_unused e6.usbsh e6.fbtest rapuyama_isasw.isasw_host=1 rapuyama_isasw.isasw_sched=0 rapuyama_keepalive.mask=0x7 e6.shmwatch=0 rapuyama_theories.probe=0";
+	};
+};

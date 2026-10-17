@@ -7,7 +7,8 @@ KOUT="$HERE/build-display"
 # must stay above the fb (0x10480000..0x10880000) AND be 2 MiB aligned:
 # with ARM_PATCH_PHYS_VIRT, __fixup_pv_table in head.S deadloops on a
 # misaligned PHYS_OFFSET before the mmu/earlycon are up -> silent wdt reset.
-DISPLAY_PHYS_OFFSET=0x10a00000
+# e6.dts ram starts at 0x11600000 now (modem fw below), so same as e6.config
+DISPLAY_PHYS_OFFSET=0x11600000
 if (( DISPLAY_PHYS_OFFSET & 0x1fffff )); then
 	echo "PHYS_OFFSET $DISPLAY_PHYS_OFFSET is not 2 MiB aligned" >&2
 	exit 1
