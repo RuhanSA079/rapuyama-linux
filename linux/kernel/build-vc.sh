@@ -51,11 +51,8 @@ make -C "$KSRC" O="$KOUT" scripts_dtc
 
 "$KOUT/scripts/dtc/dtc" -I dts -O dtb -i "$HERE/../boot" \
 	-o "$KOUT/e6-vc.dtb" "$HERE/../boot/e6-vc.dts"
-"$KOUT/scripts/dtc/dtc" -I dts -O dtb -i "$HERE/../boot" \
-	-o "$KOUT/e6-keys.dtb" "$HERE/../boot/e6-keys.dts"
 
 echo
 echo "zImage: $KOUT/arch/arm/boot/zImage"
 echo "DTB:    $KOUT/e6-vc.dtb"
-echo "        $KOUT/e6-keys.dtb (i2c on, for keyscan)"
 ls -lh "$KOUT/arch/arm/boot/zImage"

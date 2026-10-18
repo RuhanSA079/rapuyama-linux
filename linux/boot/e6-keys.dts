@@ -1,8 +1,0 @@
-/* e6-vc.dts + i2c on, for the keypad chip at 0x44 (keyscan in the shell).
- * separate dtb because regprobe run 3 died on an i2c reg under symbian: if
- * i2c-omap kills the boot, e6-vc.dtb still works */
-/include/ "e6-vc.dts"
-
-&i2c0 {
-	status = "okay";
-};

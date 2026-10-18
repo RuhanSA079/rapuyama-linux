@@ -8,16 +8,19 @@
 # two sources, polled every ~20 ms:
 # - gpio levels, banks 0-4 (0x200319f0 + 0x10 * k, egpio): side keys wired
 #   straight to pins. event "gpioN 0/1", N = bank * 32 + bit like in the dt
-# - the keypad chip on i2c 0x44 (keypad_exp.dll), if i2c is up (e6-keys.dtb).
+# - the keypad chip on i2c 0x44 (keypad_exp.dll), only while the tc3589x
+#   driver doesn't own it (it does now, the matrix is mapped in e6.dts).
 #   reg 0x80 = 3 -> toshiba tc3589x (pop the event fifo, reg 0x10), 0 ->
 #   lm8323 style (read int 0x82, then fifo 0x89). symbian left it configured,
 #   so no setup here. event "kpXX down/up", XX = raw chip code
 # learn: a 5 s noise check first (pins that move on their own are dropped),
 # then per key "press it twice, Enter on the pc". everything seen twice or
 # more is the answer. results in /tmp/keys.txt, paste that to claude
-DEFAULT_KEYS="power volup playpause voldown call end home calendar messages
-contacts left up right down center q w e r t y u i o p a s d f g h j k l
-backspace shift z x c v b n m comma dot enter fn ctrl sym space"
+# order = the e6 layout row by row. lock = the slider, slide it on and off
+# twice. zh = the ж/б key, eh = э/ю
+DEFAULT_KEYS="power volup playpause voldown lock call home calendar center up
+down left right messages contacts end q w e r t y u i o p a s d f g h j k l
+backspace z x c v b n m zh eh enter fn shift sym space comma dot ctrl"
 
 EV=/tmp/keyev
 OUT=/tmp/keys.txt
@@ -32,7 +35,7 @@ kp_detect() {
 		break
 	done
 	if [ -z "$BUS" ]; then
-		echo "no i2c bus (boot e6-keys.dtb for the keypad chip), gpio only"
+		echo "no i2c bus, gpio only"
 		return
 	fi
 	id=$(i2cget -y "$BUS" 0x44 0x80 2>/dev/null)

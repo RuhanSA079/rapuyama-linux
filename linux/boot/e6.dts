@@ -226,8 +226,8 @@
 		};
 
 		/* i2c0.dll: same regs, bits and scl formula as the TI OMAP i2c
-		 * (omap2420 layout, 16 bit regs 4 apart). irq 0x96. LM8320 keypad
-		 * controller (keypad_exp.dll) hangs on i2c */
+		 * (omap2420 layout, 16 bit regs 4 apart). irq 0x96. works under
+		 * linux (keyscan run 18.10.2026) */
 		i2c0: i2c@20032200 {
 			compatible = "ti,omap2420-i2c";
 			reg = <0x20032200 0x40>;
@@ -235,11 +235,75 @@
 			clocks = <&cgc 0x11>;
 			clock-names = "fck";
 			clock-frequency = <100000>;
-			/* off for the first boots: regprobe run 3 died on OA (+0x28) and
-			 * i2c-omap pokes regs like that at probe */
-			status = "disabled";
 			#address-cells = <1>;
 			#size-cells = <0>;
+
+			/* keypad chip: id reg 0x80 = 3 -> toshiba tc3589x (keypad_exp.dll
+			 * Small25Pin class). driven by our polled rapuyama-keypad, the
+			 * mainline tc3589x drivers reset it into a NACKing state.
+			 * fifo code = row << 4 | col, mapped live with keyscan.
+			 * MATRIX_KEY(row, col, code) = row << 24 | col << 16 | code,
+			 * no cpp here so raw numbers. zh/eh keys = ; and ' like the
+			 * pc russian layout. calendar gave the home code, power and
+			 * the lock slider aren't on the matrix */
+			keypad@44 {
+				compatible = "nokia,rapuyama-keypad";
+				reg = <0x44>;
+				keypad,num-rows = <8>;
+				keypad,num-columns = <7>;
+				linux,keymap = <
+					0x00000010 /* q */
+					0x00010011 /* w */
+					0x00020012 /* e */
+					0x00030013 /* r */
+					0x00040014 /* t */
+					0x00050015 /* y */
+					0x00060016 /* u */
+					0x0100001e /* a */
+					0x0101001f /* s */
+					0x01020020 /* d */
+					0x01030021 /* f */
+					0x01040022 /* g */
+					0x01050023 /* h */
+					0x01060024 /* j */
+					0x0200002c /* z */
+					0x0201002d /* x */
+					0x0202002e /* c */
+					0x0203002f /* v */
+					0x02040030 /* b */
+					0x02050031 /* n */
+					0x02060032 /* m */
+					0x03000017 /* i */
+					0x03010018 /* o */
+					0x03020019 /* p */
+					0x03030061 /* ctrl */
+					0x030601bd /* call (KEY_PICKUP_PHONE) */
+					0x04000025 /* k */
+					0x04010026 /* l */
+					0x0402000e /* backspace */
+					0x04030073 /* volume up */
+					0x0404002a /* shift */
+					0x040600ac /* home (KEY_HOMEPAGE) */
+					0x05000027 /* zh (;) */
+					0x05010028 /* eh (') */
+					0x0502001c /* enter */
+					0x050401be /* end call (KEY_HANGUP_PHONE) */
+					0x05050034 /* dot */
+					0x05060072 /* volume down */
+					0x0600007f /* sym (KEY_COMPOSE) */
+					0x06010039 /* space */
+					0x060301ad /* contacts (KEY_ADDRESSBOOK) */
+					0x060401ae /* messages (KEY_MESSENGER) */
+					0x06050033 /* comma */
+					0x060601d0 /* fn arrow (KEY_FN) */
+					0x07000067 /* up */
+					0x0701006c /* down */
+					0x07020069 /* left */
+					0x0703006a /* right */
+					0x07040160 /* center (KEY_OK) */
+					0x070600a4 /* play/pause */
+				>;
+			};
 		};
 
 		/* egpio.dll, 5 in/out banks + 2 output only banks. second reg =

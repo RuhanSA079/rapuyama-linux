@@ -26,7 +26,7 @@ log() { echo "e6: $*" > /dev/kmsg; }
 # the "alive" heartbeat is written by the kernel straight into ramcon now
 # (mach-rapuyama, every 10 s), so it no longer floods the console
 
-log "init.sh v5 (usb shell waits for enter, reboot/poweroff)"
+log "init.sh v6 (usb shell + screen shell on tty1)"
 
 # reboot / poweroff / halt typed in the shell: busybox signals pid 1 (TERM =
 # reboot, USR2 = poweroff, USR1 = halt), and pid 1 is this script. stop
@@ -103,9 +103,25 @@ fb_test() {
 	fi
 }
 
+# shell on the phone's own screen (fbcon = tty1) + keypad. respawns on exit
+screen_shell() {
+	n=0
+	while [ ! -c /dev/tty1 ] && [ "$n" -lt 10 ]; do
+		n=$((n + 1))
+		sleep 1
+	done
+	log "shell on tty1 (screen + keypad)"
+	while true; do
+		clear > /dev/tty1
+		setsid cttyhack sh < /dev/tty1 > /dev/tty1 2>&1
+		sleep 1
+	done
+}
+
 if grep -q e6.usbsh /proc/cmdline; then
 	usb_shell &
-	grep -q e6.fbtest /proc/cmdline && fb_test &
+	# after the test pattern, else the pattern lands on top of the shell
+	{ grep -q e6.fbtest /proc/cmdline && fb_test; screen_shell; } &
 	# stay pid 1. wait returns on a signal, so the traps above run right away
 	while true; do
 		sleep 3600 &
