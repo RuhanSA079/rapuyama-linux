@@ -12,12 +12,25 @@
 #include "runblob.h"
 
 _LIT(KLog, "E:\\boot.log");
+#ifdef RB_IMAGE_BOOT
+// e6bfix: the uncompressed kernel (build-vc/arch/arm/boot/Image), it runs in
+// place inside the chunk, see AllocBoot in runblob_ldd.cpp
+_LIT(KZImage, "E:\\Image");
+#else
 _LIT(KZImage, "E:\\zImage");
+#endif
 _LIT(KDtb, "E:\\e6.dtb");
 
 const TUint32 KZOff=0x00008000; // TEXT_OFFSET
+#ifdef RB_IMAGE_BOOT
+// the Image runs in place up to ~chunk+0x1690000 (_end), the dtb right after
+// the kernel keeps it reserved. 32 mb so the chunk can sit high enough
+const TUint32 KDtbOff=0x01f00000;
+const TUint32 KChunkSz=0x02000000;
+#else
 const TUint32 KDtbOff=0x02000000; // 32 mb into the chunk
 const TUint32 KChunkSz=0x03000000; // 48 mb
+#endif
 const TInt KBuf=32768;
 
 static RFs gFs;

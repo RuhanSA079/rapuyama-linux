@@ -193,13 +193,14 @@ static void PrepareHw(){
 
 class DRunBlobChan : public DLogicalChannelBase{
 	public:
-		DRunBlobChan() : iBootChunk(NULL), iBootPhys(0), iBootVirt(0), iBootSize(0){}
+		DRunBlobChan() : iBootChunk(NULL), iBootPhys(0), iBootVirt(0), iBootSize(0), iBootAlloc(0){}
 		virtual ~DRunBlobChan(){}
 		// boot chunk state, kept between AllocBoot/LoadChunk/Boot calls
 		DPlatChunkHw* iBootChunk;
 		TPhysAddr iBootPhys;
 		TLinAddr iBootVirt;
-		TUint32 iBootSize;
+		TUint32 iBootSize; // mapped
+		TUint32 iBootAlloc; // allocated, >= iBootSize (e6bfix holds more)
 	protected:
 		virtual TInt DoCreate(TInt, const TDesC8*, const TVersion&){return KErrNone;}
 		virtual TInt Request(TInt aFunction, TAny* a1, TAny* a2);
@@ -435,16 +436,52 @@ TInt DRunBlobChan::Request(TInt aFunction, TAny* a1, TAny* a2){
 		if(iBootChunk){
 			iBootChunk->Close(NULL);
 			iBootChunk=NULL;
-			Epoc::FreePhysicalRam(iBootPhys, iBootSize);
+			Epoc::FreePhysicalRam(iBootPhys, iBootAlloc);
 			iBootSize=0;
+			iBootAlloc=0;
 		}
 		size=(size+0xFFFFFu)&~0xFFFFFu; // round up to 1 mb
+#ifdef RB_IMAGE_BOOT
+		// e6bfix: the uncompressed Image runs right where it sits (chunk+0x8000,
+		// PHYS_OFFSET = chunk, ARM_PATCH_PHYS_VIRT), so no decompressor writes
+		// into ram symbian never gave us (0x11600000.. was its live memory, any
+		// dma it left running landed in the kernel = the random XZ corrupt /
+		// bad dtb deaths 18.10.2026). linux can't use ram below the chunk and
+		// needs ~60 mb from its start (qemu, cma=0): base <= 0x1a000000.
+		// phone runs: ClaimPhysicalRam pages can't be mapped (-14), a 32 mb
+		// alloc lands too high (-4). so ask for the BIGGEST block symbian can
+		// give (it has to compact and hand out low ram): then nearly all of
+		// linux's ram is ram symbian gave away. out-of-range blocks are held
+		// so the next try lands elsewhere. the requested size is ignored
+		static const TUint32 KSizes[]={0xa000000u, 0x9000000u, 0x8000000u, 0x7000000u, 0x6000000u, 0x5000000u, 0x4000000u, 0x3000000u, 0x2000000u};
+		const TUint32 KLo=0x11600000u, KHi=0x1a000000u;
+		TInt r=KErrNoMemory;
+		TPhysAddr held[4];
+		TUint32 heldsz[4];
+		TInt nheld=0;
+		for(TUint k=0; r!=KErrNone && k<sizeof(KSizes)/sizeof(KSizes[0]); ++k){
+			TPhysAddr p=0;
+			if(Epoc::AllocPhysicalRam((TInt)KSizes[k], p, 21)!=KErrNone){continue;}
+			if(p>=KLo && p<=KHi && p+KSizes[k]<=0x1f000000u){iBootPhys=p; size=KSizes[k]; r=KErrNone;}
+			else if(nheld<4){held[nheld]=p; heldsz[nheld++]=KSizes[k];}
+			else{Epoc::FreePhysicalRam(p, (TInt)KSizes[k]);}
+		}
+		for(TInt i=0; i<nheld; ++i){Epoc::FreePhysicalRam(held[i], (TInt)heldsz[i]);}
+		if(r!=KErrNone){return KErrNoMemory;}
+		// all of it stays allocated (no symbian buffers in linux's ram), only
+		// the first 32 mb (Image + dtb) get mapped
+		TUint32 alloc=size;
+		if(size>0x2000000u){size=0x2000000u;}
+#else
 		TInt r=Epoc::AllocPhysicalRam((TInt)size, iBootPhys, 20);
 		if(r!=KErrNone){return r;}
+		TUint32 alloc=size;
+#endif
 		r=DPlatChunkHw::New(iBootChunk, iBootPhys, (TInt)size, EMapAttrSupRw|EMapAttrCachedMax);
-		if(r!=KErrNone){Epoc::FreePhysicalRam(iBootPhys, (TInt)size); iBootPhys=0; return r;}
+		if(r!=KErrNone){Epoc::FreePhysicalRam(iBootPhys, (TInt)alloc); iBootPhys=0; return r;}
 		iBootVirt=iBootChunk->LinearAddress();
 		iBootSize=size;
+		iBootAlloc=alloc;
 		TUint32 out=(TUint32)iBootPhys;
 		return Kern::ThreadRawWrite(&Kern::CurrentThread(), a2, &out, 4);
 	}

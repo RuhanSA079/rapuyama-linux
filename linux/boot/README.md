@@ -19,6 +19,13 @@ Chunk layout: zImage @ `+0x8000` (TEXT_OFFSET), DTB @ `+0x02000000`, chunk 48 MB
 The kernel is built with fixed `PHYS_OFFSET=0x10000000` and
 `ARM_PATCH_PHYS_VIRT`, matching the DTB's 256 MiB RAM range. This deliberately avoids `AUTO_ZRELADDR`, which rounded a zImage chunk at `0x18000000` down to that 128 MiB boundary and caused Linux to discard the lower half of RAM.
 
+## e6bfix: boot the Image in place (18.10.2026)
+`e6boot.sis` decompresses the zImage to a fixed `0x11600000`, RAM that Symbian never gave us. Big kernels died at random boots there. `e6bfix.sis` boots the uncompressed `E:\Image` where it was loaded instead:
+- the chunk is the biggest block `Epoc::AllocPhysicalRam` gives (160 down to 32 MB), the kernel sits at chunk + `0x8000`, the DTB at chunk + `0x1f00000`. `ARM_PATCH_PHYS_VIRT` makes the chunk `PHYS_OFFSET`
+- `cma=0` in the bootargs frees 32 MB
+- build: `RB_DEFS=-DRB_IMAGE_BOOT ./build_app.sh e6bfix boot_app.cpp 0xe1000024` in `../stage0/symbian-loader`
+- copy `Image` to `E:\Image` and the DTB to `E:\e6.dtb`, run the e6bfix icon
+
 ## Optional UART console wiring
 The separate hardware serial console is the **bluetooth uart**
 (`0x20025a00`, `rapuyama_earlycon`); it has test pads on the N8 board (same RapuYama board family as the E6, check the E6 board for the same pads):

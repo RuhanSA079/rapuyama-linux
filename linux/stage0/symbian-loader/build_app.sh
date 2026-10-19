@@ -11,6 +11,8 @@
 #   ./build_app.sh e6boot boot_app.cpp    0xe1000020   -> out/e6boot.sis
 #   ./build_app.sh e6logs ramread_app.cpp 0xe1000022   -> out/e6logs.sis
 #   ./build_app.sh all                                  -> both
+#   RB_DEFS=-DRB_IMAGE_BOOT ./build_app.sh e6bfix boot_app.cpp 0xe1000024
+#     -> out/e6bfix.sis: boots E:\Image in place (no decompressor)
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"
@@ -57,7 +59,7 @@ COMMON=(
   -nostdinc -fno-exceptions -fno-rtti -fshort-wchar -fno-unit-at-a-time -O2
   -D__SYMBIAN32__ -D__GCCE__ -D__EABI__ -D__MARM__ -D__MARM_ARMV5__ -D__MARM_ARMV6__
   -D__EPOC32__ -D__GCC32__ -D__SUPPORT_CPP_EXCEPTIONS__ -D__GCCV3__ -D__PRODUCT_INCLUDE__='<variant_dummy.h>'
-  -DRB_NAME="\"$NAME\""
+  -DRB_NAME="\"$NAME\"" ${RB_DEFS:-}
   -include gcce.h -include "$DRV/gcce_post.h"
   "${INC[@]}"
 )

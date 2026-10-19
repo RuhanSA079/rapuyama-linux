@@ -22,7 +22,12 @@ arm-linux-gnu-gcc -march=armv6k -marm -static -nostdlib -fno-pie -no-pie \
 	-ffreestanding -fno-builtin -fomit-frame-pointer -fno-stack-protector \
 	-Os -Wall -Wextra \
 	-Wl,-e,_start -o "$KOUT/vcprobe" "$HERE/../initramfs/vcprobe.c" -lgcc
+# userspace for /dev/vc-khrn (musl, clang + alpine sysroot)
+"$HERE/../vc-khrn/build.sh" "$KOUT/vc-khrn"
 python3 "$HERE/../../tools/vc_extract.py" "$KERN_BIN" "$KOUT/vcfw"
+# alpine armhf userspace with weston (cached, see alpine.sh)
+ROOTFS="$HERE/../../work/rootfs-alpine"
+"$HERE/../initramfs/alpine.sh" "$ROOTFS"
 
 cp "$HERE/../initramfs/initramfs.list" "$KOUT/initramfs.list"
 {
@@ -30,7 +35,18 @@ cp "$HERE/../initramfs/initramfs.list" "$KOUT/initramfs.list"
 	printf '\ndir /usr 755 0 0\ndir /usr/bin 755 0 0\n'
 	printf 'file /usr/bin/fbtest %s 755 0 0\n' "$KOUT/fbtest"
 	printf 'file /usr/bin/vcprobe %s 755 0 0\n' "$KOUT/vcprobe"
+	printf 'file /usr/bin/khrntest %s 755 0 0\n' "$KOUT/vc-khrn/khrntest"
+	printf 'file /usr/bin/vctri %s 755 0 0\n' "$KOUT/vc-khrn/vctri"
+	printf 'file /usr/lib/libvcgl.so %s 755 0 0\n' "$KOUT/vc-khrn/libvcgl.so"
+	printf 'slink /usr/lib/libEGL.so.1 libvcgl.so 777 0 0\n'
+	printf 'slink /usr/lib/libGLESv2.so.2 libvcgl.so 777 0 0\n'
 	printf 'dir /lib 755 0 0\ndir /lib/firmware 755 0 0\ndir /lib/firmware/vc 755 0 0\n'
+	printf 'dir /etc/xdg 755 0 0\ndir /etc/xdg/weston 755 0 0\n'
+	printf 'file /etc/xdg/weston/weston.ini %s 644 0 0\n' "$HERE/../initramfs/weston.ini"
+	printf 'file /usr/share/X11/xkb/symbols/e6 %s 644 0 0\n' "$HERE/../initramfs/xkb-e6"
+	printf 'file /usr/bin/e6-term %s 755 0 0\n' "$HERE/../initramfs/e6-term.sh"
+	printf 'file /usr/bin/fps %s 755 0 0\n' "$HERE/../initramfs/fps.sh"
+	printf 'file /etc/fonts/local.conf %s 644 0 0\n' "$HERE/../initramfs/fonts-local.conf"
 	for f in vc-loader-a vc-loader-b vc-main; do
 		printf 'file /lib/firmware/vc/%s.bin %s 644 0 0\n' "$f" "$KOUT/vcfw/$f.bin"
 		printf 'file /lib/firmware/vc/%s.trl %s 644 0 0\n' "$f" "$KOUT/vcfw/$f.trl"
@@ -42,17 +58,24 @@ cp "$HERE/../initramfs/initramfs.list" "$KOUT/initramfs.list"
 "$KSRC/scripts/config" --file "$KOUT/.config" --disable FB_RAPUYAMA
 "$KSRC/scripts/config" --file "$KOUT/.config" --enable FB --enable FRAMEBUFFER_CONSOLE
 "$KSRC/scripts/config" --file "$KOUT/.config" --enable SOC_RAPUYAMA_VIDEOCORE
-"$KSRC/scripts/config" --file "$KOUT/.config" --set-str INITRAMFS_SOURCE "$KOUT/initramfs.list"
-"$KSRC/scripts/config" --file "$KOUT/.config" --enable RAPUYAMA_MODEM
+# rootfs first, our list after it wins on the same paths. uid/gid map our files to root
+"$KSRC/scripts/config" --file "$KOUT/.config" --set-str INITRAMFS_SOURCE "$ROOTFS $KOUT/initramfs.list"
+"$KSRC/scripts/config" --file "$KOUT/.config" --set-val INITRAMFS_ROOT_UID "$(id -u)"
+"$KSRC/scripts/config" --file "$KOUT/.config" --set-val INITRAMFS_ROOT_GID "$(id -g)"
+"$KSRC/scripts/config" --file "$KOUT/.config" --disable INITRAMFS_COMPRESSION_GZIP --enable INITRAMFS_COMPRESSION_XZ
+# modem experiments off (drivers/misc/rapuyama_*), they made boots die
+"$KSRC/scripts/config" --file "$KOUT/.config" --disable RAPUYAMA_MODEM
 
 make -C "$KSRC" O="$KOUT" olddefconfig
 make -C "$KSRC" O="$KOUT" -j"$(nproc)" zImage
 make -C "$KSRC" O="$KOUT" scripts_dtc
 
-"$KOUT/scripts/dtc/dtc" -I dts -O dtb -i "$HERE/../boot" \
-	-o "$KOUT/e6-vc.dtb" "$HERE/../boot/e6-vc.dts"
+for v in vc vc-565 vc-khrn vc-gl; do
+	"$KOUT/scripts/dtc/dtc" -I dts -O dtb -i "$HERE/../boot" \
+		-o "$KOUT/e6-$v.dtb" "$HERE/../boot/e6-$v.dts"
+done
 
 echo
 echo "zImage: $KOUT/arch/arm/boot/zImage"
-echo "DTB:    $KOUT/e6-vc.dtb"
+echo "DTB:    $KOUT/e6-vc-565.dtb (daily), e6-vc.dtb, e6-vc-khrn.dtb, e6-vc-gl.dtb"
 ls -lh "$KOUT/arch/arm/boot/zImage"

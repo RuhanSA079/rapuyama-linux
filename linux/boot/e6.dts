@@ -225,11 +225,10 @@
 			status = "okay";
 		};
 
-		/* i2c0.dll: same regs, bits and scl formula as the TI OMAP i2c
-		 * (omap2420 layout, 16 bit regs 4 apart). irq 0x96. works under
-		 * linux (keyscan run 18.10.2026) */
+		/* i2c0.dll: the TI OMAP i2c in the omap2420 layout, but with an 8 bit
+		 * DATA reg (ti,omap2420-i2c zeroes every second byte). irq 0x96 */
 		i2c0: i2c@20032200 {
-			compatible = "ti,omap2420-i2c";
+			compatible = "nokia,rapuyama-i2c";
 			reg = <0x20032200 0x40>;
 			interrupts = <150>;
 			clocks = <&cgc 0x11>;
@@ -295,7 +294,7 @@
 					0x060301ad /* contacts (KEY_ADDRESSBOOK) */
 					0x060401ae /* messages (KEY_MESSENGER) */
 					0x06050033 /* comma */
-					0x060601d0 /* fn arrow (KEY_FN) */
+					0x06060064 /* fn arrow (KEY_RIGHTALT = level 3 in xkb e6) */
 					0x07000067 /* up */
 					0x0701006c /* down */
 					0x07020069 /* left */
@@ -303,6 +302,12 @@
 					0x07040160 /* center (KEY_OK) */
 					0x070600a4 /* play/pause */
 				>;
+			};
+
+			/* atmel maXTouch, polled: irq gpio 123 polarity is unknown */
+			touchscreen@4a {
+				compatible = "nokia,rapuyama-mxt";
+				reg = <0x4a>;
 			};
 		};
 

@@ -18,7 +18,9 @@ mkdir -p /dev/pts
 mount -t devpts devpts /dev/pts
 mount -t tmpfs tmp /tmp
 
-export PATH=/bin:/sbin HOME=/root TERM=vt100 PS1='e6:\w# '
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin HOME=/root TERM=vt100 PS1='e6:\w# '
+# busybox line editing only does utf-8 (cyrillic in weston-terminal) with this
+export LANG=C.UTF-8
 hostname e6
 
 log() { echo "e6: $*" > /dev/kmsg; }
@@ -26,7 +28,7 @@ log() { echo "e6: $*" > /dev/kmsg; }
 # the "alive" heartbeat is written by the kernel straight into ramcon now
 # (mach-rapuyama, every 10 s), so it no longer floods the console
 
-log "init.sh v6 (usb shell + screen shell on tty1)"
+log "init.sh v7 (usb shell + weston, tty1 shell as fallback)"
 
 # reboot / poweroff / halt typed in the shell: busybox signals pid 1 (TERM =
 # reboot, USR2 = poweroff, USR1 = halt), and pid 1 is this script. stop
@@ -118,10 +120,59 @@ screen_shell() {
 	done
 }
 
+# every line of a program's output into the kernel log (klog.bin), tagged
+to_kmsg() {
+	while IFS= read -r l; do
+		echo "$1: $l" > /dev/kmsg
+	done
+}
+
+# weston with seatd, if it dies right away again with libseat noop
+gui() {
+	local n=0 t
+	while ! ls /dev/dri/card* > /dev/null 2>&1 && [ "$n" -lt 20 ]; do
+		n=$((n + 1))
+		sleep 1
+	done
+	if ! ls /dev/dri/card* > /dev/null 2>&1; then
+		log "no /dev/dri/card* after 20 s, no weston"
+		return 1
+	fi
+	export XDG_RUNTIME_DIR=/run/user/0 SHELL=/bin/sh
+	mkdir -p /run/user/0 /var/cache/fontconfig
+	chmod 700 /run/user/0
+
+	[ -S /run/seatd.sock ] || { seatd 2>&1 | to_kmsg seatd & }
+	n=0
+	while [ ! -S /run/seatd.sock ] && [ "$n" -lt 10 ]; do
+		n=$((n + 1))
+		sleep 1
+	done
+	for b in seatd noop; do
+		log "starting weston (libseat $b)"
+		t=$(cut -d. -f1 /proc/uptime)
+		LIBSEAT_BACKEND=$b weston 2>&1 | to_kmsg weston
+		t=$(($(cut -d. -f1 /proc/uptime) - t))
+		log "weston (libseat $b) exited after $t s"
+		# it ran for a while = it worked, a plain restart is fine
+		[ "$t" -gt 30 ] && return 0
+	done
+	return 1
+}
+
 if grep -q e6.usbsh /proc/cmdline; then
 	usb_shell &
-	# after the test pattern, else the pattern lands on top of the shell
-	{ grep -q e6.fbtest /proc/cmdline && fb_test; screen_shell; } &
+	# after the test pattern, else the pattern lands on top of the shell.
+	# e6.nogui on the cmdline = straight to the screen shell
+	{
+		grep -q e6.fbtest /proc/cmdline && fb_test
+		if ! grep -q e6.nogui /proc/cmdline; then
+			while gui; do
+				sleep 1
+			done
+		fi
+		screen_shell
+	} &
 	# stay pid 1. wait returns on a signal, so the traps above run right away
 	while true; do
 		sleep 3600 &

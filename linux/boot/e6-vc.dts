@@ -5,7 +5,7 @@
 
 / {
 	chosen {
-		bootargs = "earlycon=ramcon,0x1f000000 keep_bootcon console=tty0 panic=10 nohlt clk_ignore_unused pd_ignore_unused e6.usbsh e6.fbtest";
+		bootargs = "earlycon=ramcon,0x1f000000 keep_bootcon console=tty0 panic=10 nohlt clk_ignore_unused pd_ignore_unused cma=0 e6.usbsh e6.fbtest";
 	};
 
 	/* ViSSI host bus to the BCM2727. clock: power resource 0x18
@@ -13,7 +13,9 @@
 	 * polled through the bus status instead */
 	videocore@20025800 {
 		compatible = "nokia,rapuyama-videocore";
-		reg = <0x20025800 0x100>;
+		/* ViSSI bus, gfx dma, the pll and the gfx clock divider */
+		reg = <0x20025800 0x100>, <0x20024800 0x300>,
+		      <0x20032664 0x4>, <0x20033038 0x4>;
 		clocks = <&cgc 0x18>;
 		run-gpios = <&gpio 92 0>;
 	};

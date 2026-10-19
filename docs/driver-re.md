@@ -125,7 +125,7 @@ Reversed from egpio + how the bt uart / onenand / usb / power drivers use it.
 
 ## I2C (i2c0.dll, `0x20032200`, irq 150)
 **It's the TI OMAP i2c** (omap2420 layout: 16 bit regs 4 apart): REV `+0x00`, IE `+0x04`, STAT `+0x08` (AL/NACK/ARDY/RRDY/XRDY = 1/2/4/8/0x10), CNT `+0x18`, DATA `+0x1c`, CON `+0x24` (`0x8403` = EN|MST|STP|STT), OA `+0x28`, SA `+0x2c`, PSC `+0x30` = 0, SCLL/SCLH `+0x34/+0x38` = fclk*t - 7 / - 5 (omap formula).
-fclk 19.2 MHz, or pll/div (`0x20033130` bit 14, div sel `0x20033010` bits 12-14, max 24 MHz). -> mainline `i2c-omap` with `ti,omap2420-i2c`.
+fclk 19.2 MHz, or pll/div (`0x20033130` bit 14, div sel `0x20033010` bits 12-14, max 24 MHz). -> mainline `i2c-omap` as `nokia,rapuyama-i2c`: the omap2420 flags, but DATA is 8 bit (i2c0.dll moves one byte per RRDY / XRDY). `ti,omap2420-i2c` zeroes every second byte of longer reads.
 Keypad = **LM8320** on i2c (keypad_exp.dll: `DIOExpHwLM8320ST/NSC/Toshiba`), mainline has `lm8323` (platform data only, needs dt glue).
 - i2c addr **`0x44`**, irq = gpio pin **42** (bank 1 bit 10, intc 358), config byte `0x87` = 8 rows x 7 cols, uses the LM8323 command set (`0x91` = READ_CFG).
 - fifo code = `row << 4 | (col + 1)`, map at kernel data `0xc800f514` (filled from rom `0x801e3610..`): `01 Q 02 W 03 E 04 1 05 2 06 3 07 * 11 A 12 S 13 D 14 4 15 5 16 6 17 # 21 Z 22 X 23 C 24 7 25 8 26 9 27 0 31 I 32 O 33 P 34 RCtrl 36 Dev0 37 Yes 41 K 42 L 43 Backspace 44 VolUp 45 LShift 46 App1A 47 App0 51 , 52 . 53 Enter 54 Dev1 55 No 56 ' 57 VolDown 61 LFn 62 Space 64 App1F 65 App1B 66 ] 67 RFn 71 Up 72 Down 73 Left 74 Right 75 Dev3 77 Dev6` (values = symbian TStdScanCode).
@@ -138,6 +138,10 @@ Keypad = **LM8320** on i2c (keypad_exp.dll: `DIOExpHwLM8320ST/NSC/Toshiba`), mai
 GPIO irqs in linux: `gpio-rapuyama` is a hierarchical irqchip on the (now hierarchical) intc, parent line per pin from the egpio table. Enable/ack/edge/level are from the code, the polarity regs are a guess.
 
 Live check: `driver/regprobe.sis` -> `E:\regprobe.bin` -> `tools/parse_regprobe.py` (i2c REV for i2c-omap, i2c fclk source, gpio state).
+
+## Touchscreen (atmel_qt.dll)
+Atmel maXTouch on i2c0 **`0x4a`**, 16 bit register addresses. irq = gpio 123 (egpio id `0x7b`), power = PMIC resource `0x34`, left on by Symbian.
+- Linux: `drivers/input/touchscreen/rapuyama-mxt.c`, polled, T9 touches -> multitouch slots. works (19.10.2026)
 
 ## Watchdog (power.dll / sisa_wrapper.dll)
 - the pmic is **Retu style on CBUS** (karap reg table `0x800bc268`: dev 1 regs `0x00..0x1e`, dev 2 = Tahvo style `0x00..0x1f`, 16 bit) - same as the N800.
