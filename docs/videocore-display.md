@@ -22,8 +22,8 @@ Daily config: `out/Image` + `out/e6-vc-565.dtb` (`videocore.dma=1 videocore.rgb5
 - keyboard: `linux/initramfs/xkb-e6`. fn = level 3 (yellow symbols), sym = en/ru, fn+space = tab, fn+backspace = escape
 - `fps` / `fps line` in the shell: full screen scroll / one line counter for 12 s, then the driver's 10 s push stats as fps
 
-<img src="docs/weston-qemu-preview.png" alt="weston running in qemu" width="600">
-<img src="docs/weston-live.jpg" alt="weston running in live" width="600">
+<img src="weston-live.jpg" alt="weston running in live" width="400">
+<img src="weston-qemu-preview.png" alt="weston running in qemu" width="400">
 
 ## Speed (18.10.2026)
 
