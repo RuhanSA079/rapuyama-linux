@@ -1,0 +1,10 @@
+Kernel #196, e6.swd=1.
+
+e6:/# dmesg | grep rapuyama-swd
+[    1.410736] rapuyama-swd: PA_SWD 0x1f ready, token 240 guest stack c68fdc28
+[    6.486267] rapuyama-swd: call 1 stage 60 transport 1 result 1 timeout 240 token 240
+[  218.083435] rapuyama-swd: call 2 stage 60 transport 1 result 1 timeout 240 token 240
+[  433.121124] rapuyama-swd: call 3 stage 60 transport 1 result 1 timeout 240 token 240
+[  648.158660] rapuyama-swd: call 4 stage 60 transport 1 result 1 timeout 240 token 240
+e6:/# date
+Thu Jan  1 00:12:19 GMT 1970

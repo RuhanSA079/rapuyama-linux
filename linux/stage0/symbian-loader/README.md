@@ -27,7 +27,7 @@ driver includes. The build scripts run `make` themselves.
 | `FullTramp` | `tramp3` hands off to `fakekern` at `+0x8000` with boot regs, comes back | works but ~50% flaky (cache/tlb race), `parse_fulltramp.py` |
 | `FbFill` | fill ram through an existing kernel va (framebuffer hunt) | found the fb at `0x10480000` |
 | `Takeover` | ONE-WAY: mmu off, loop filling fb candidates | screen doesn't update (command-mode panel) |
-| `AllocBoot` / `LoadChunk` / `Boot` | zImage booter, see `../../boot/README.md` | built, blocked on watchdog + drivers |
+| `AllocBoot` / `LoadChunk` / `Boot` | zImage booter, see `../../boot/README.md` | boots; PA_SWD reset fixed on E6 (22.10.2026) |
 | `TimedDiff` | read A, spin, read B -> free-running counters | built, not run yet |
 | `SecureTrace` | one-way watchdog-fed loop; logs fast-counter gaps to reserved RAM | build/run below |
 

@@ -144,3 +144,9 @@ Please send:
 - a boot log
 
 Mark every value as **live-checked** or **from the ROM only**, the same way the existing notes do.
+
+## Secure watchdog after handoff (E6, confirmed 22.10.2026)
+
+Feeding the SoC and PMIC watchdogs is insufficient on the E6: a third watchdog is serviced by the secure PA_SWD application, command `0x1f`, with a 240-second timeout. The E6 Linux bridge uses the preserved firmware context and rearms at timeout minus 30 seconds; enable it with `e6.swd=1`. Kernel #196 completed four successful calls through 648 seconds on hardware ([report and evidence](modem-reset-findings.md)).
+
+The bridge checks `nokia,e6`, the ISAH handoff and firmware entry signatures. Its addresses, page tables, shared-buffer pool, protected-application header and borrowed task stack come from the captured E6 runtime. Resolve and validate those separately for another firmware or device before extending the bridge. The current E6 validation does not establish compatibility with other RapuYama phones.

@@ -26,6 +26,14 @@ The kernel is built with fixed `PHYS_OFFSET=0x10000000` and
 - build: `RB_DEFS=-DRB_IMAGE_BOOT ./build_app.sh e6bfix boot_app.cpp 0xe1000024` in `../stage0/symbian-loader`
 - copy `Image` to `E:\Image` and the DTB to `E:\e6.dtb`, run the e6bfix icon
 
+## Prevent the former 240-second reset (confirmed 22.10.2026)
+
+The E6 also has a secure PA_SWD watchdog beyond the SoC and PMIC watchdogs. The Linux bridge must be enabled with **`e6.swd=1`** in `/chosen/bootargs`; it is disabled by default. Kernel #196 serviced it successfully four times through 648 seconds, with the USB shell still running.
+
+Build with `build-vc.sh`, add `e6.swd=1` to the bootargs of `e6-vc-565.dts`, copy `Image` and the DTB to `E:\Image` and `E:\e6.dtb` and boot using the **e6calb** loader. The bridge requires the preserved E6 firmware context and ISAH handoff; older loaders and other firmware versions are not covered by this validation.
+
+Check `dmesg | grep rapuyama-swd` for repeated `stage 60 transport 1 result 1 timeout 240 token 240`. See the [reset report](../../docs/modem-reset-findings.md#use-the-confirmed-fix) for the full build command, firmware path and [original console evidence](../../docs/secure-watchdog_SUCCESS.txt).
+
 ## Optional UART console wiring
 The separate hardware serial console is the **bluetooth uart**
 (`0x20025a00`, `rapuyama_earlycon`); it has test pads on the N8 board (same RapuYama board family as the E6, check the E6 board for the same pads):
@@ -53,17 +61,11 @@ The base `e6.dtb` selects a non-interactive init path that logs a sign of life a
 ## Boot with the display
 
 1. Build with `KERN_BIN=/path/to/kern.bin ../kernel/build-vc.sh`.
-2. Copy `linux/kernel/build-vc/arch/arm/boot/zImage` to the phone as
-   `E:\zImage`.
-3. Copy `linux/kernel/build-vc/e6-vc.dtb` to the phone as `E:\e6.dtb`.
-4. Boot as for the USB shell. The USB shell keeps working.
+2. Copy `linux/kernel/build-vc/arch/arm/boot/Image` to the phone as `E:\Image`.
+3. Copy `linux/kernel/build-vc/e6-vc-565.dtb` (daily: gfx DMA + RGB565) to the phone as `E:\e6.dtb`. `e6-vc.dtb` = XRGB8888, `e6-vc-khrn.dtb` / `e6-vc-gl.dtb` = VideoCore GL checks.
+4. Boot with `e6bfix.sis`, or `e6calb.sis` with `e6.swd=1` for long runs (see above). The USB shell keeps working.
 
-About 2 seconds after the handoff, the driver reboots the VideoCore. The
-Symbian picture goes away and the backlight comes on. Around 5 seconds the
-panel shows 8 colour bars for 3 seconds, then the console. Check with
-`dmesg | grep -i videocore`. Driver parameters (`videocore.cold=`,
-`videocore.brightness=`, `videocore.debug=` ...) are described in
-[`../../docs/videocore-display.md`](../../docs/videocore-display.md).
+About 2 seconds after the handoff, the driver reboots the VideoCore. The Symbian picture goes away and the backlight comes on, then the console shows up. weston + foot run from the initramfs, keypad and touchscreen work under it. Check with `dmesg | grep -i videocore`. Driver parameters (`videocore.dma=`, `videocore.rgb565=`, `videocore.cold=`, `videocore.debug=` ...), weston and GLES 2 (`libvcgl`, `/dev/vc-khrn`) are described in [`../../docs/videocore-display.md`](../../docs/videocore-display.md).
 
 ## Framebuffer-preserving kernel experiment (superseded)
 
@@ -101,6 +103,4 @@ power-off confirms that an IRQ reached the vector; no power-off is inconclusive 
 The successful boot log is preserved at
 [`../../docs/first-boot_SUCCESS.log`](../../docs/first-boot_SUCCESS.log). It shows the timer interrupt being handled, the `rapuyama-fc` clocksource becoming active, and BusyBox `/init` starting. The USB gadget shell is an additional working path confirmed on the phone.
 
-The display works with the `build-vc.sh` kernel and `e6-vc.dtb` (see "Boot with the display" above). It comes up about 5 seconds into boot, so early boot problems still need the USB shell or the RAM log. Reaching a shell does not mean that display, storage, radio, audio, or power-management support is complete; see
-[`../../docs/driver-re.md`](../../docs/driver-re.md) and
-[`../../docs/videocore-display.md`](../../docs/videocore-display.md) for the current driver findings.
+The display works with the `build-vc.sh` kernel and `e6-vc-565.dtb` (see "Boot with the display" above): weston, GLES 2 from userspace, keypad and touchscreen are confirmed on the phone. The display comes up a few seconds into boot, so early boot problems still need the USB shell or the RAM log. The SD card and internal eMMC enumerate (read-only use, never write the eMMC = Symbian `E:`). The 240-second reset is fixed with `e6.swd=1` + e6calb. Radio, audio, power key and power management are not done; see [`../../docs/driver-re.md`](../../docs/driver-re.md) and [`../../docs/videocore-display.md`](../../docs/videocore-display.md) for the current driver findings.

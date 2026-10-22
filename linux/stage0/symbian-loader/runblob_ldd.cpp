@@ -47,6 +47,74 @@ static TUint32* gBeac8Ring=NULL;
 static TUint32 gBeac8Orig0=0, gBeac8Orig1=0;
 static TLinAddr gBeac8Lin=0;
 
+// phase calibration (boot_app RB_CALIB)
+static TUint32 gCalibSnap[40];
+static TUint32 gCalibFc=0;
+static TInt gCalibKick=1; // result of the request sent at the handoff, 1 = not sent
+static TUint32 gCalibKickFc=0;
+static TUint32 gCalibStartTick=0; // symbian tick at AllocBoot = the booter's start
+static TUint32 gCalibCount=0;
+static TUint32 FastCounter(){
+	volatile TUint32* fc=(volatile TUint32*)0xc6033350u; // phys 0x20033350
+	fc[1]=0xc6033354u; // latch (same literal ekern writes)
+	return fc[0];
+}
+const TUint32 KCalibMagic=0x424c4143; // 'CALB'
+const TInt KCalibWord=0x100; // free words between 0xf8 and the L1 copy at 0x400
+// securitykext's 300 s NTimer (FUN_80140d84): object pointer at c800d1c0, the
+// timer at +0x10, its trigger tick at timer+0x20, state byte at timer+0xa
+const TUint32 KSecKextObj=0xc800d1c0u;
+// layout (words from 0x100): 0 magic, 1 version, 2 fc at handoff, 3 fc of the
+// last catch, 4 catch count, 5 secure timer state (0xffffffff = no object),
+// 6 its trigger tick, 7 tick count at handoff, 8 tick period us, 9 result of
+// the request sent at the handoff (1 = none), 10 fc right after it,
+// 11 symbian tick when the booter called AllocBoot,
+// 0x10..0x37 the 40-word snapshot of that catch
+static void WriteCalib(volatile TUint32* h){
+	volatile TUint32* c=h+KCalibWord;
+	c[0]=0;
+	c[1]=4;
+	c[2]=FastCounter();
+	c[3]=gCalibFc;
+	c[4]=gCalibCount;
+	TUint32 obj=*(volatile TUint32*)KSecKextObj;
+	c[5]=0xffffffffu;
+	c[6]=0;
+	if(obj){
+		c[5]=*(volatile TUint8*)(obj+0x10+0xa);
+		c[6]=*(volatile TUint32*)(obj+0x10+0x20);
+	}
+	c[7]=NKern::TickCount();
+	c[8]=NKern::TickPeriod();
+	c[9]=(TUint32)gCalibKick;
+	c[10]=gCalibKickFc;
+	c[11]=gCalibStartTick;
+	for(TInt i=0; i<40; ++i){c[0x10+i]=gCalibSnap[i];}
+	c[0]=KCalibMagic; // last
+}
+// WatchService: sleep until just after the inferred 210 s phase
+// the long wait itself with a countdown and calls this a few seconds before
+const TUint32 KSvcPeriod=210000, KSvcPhase=900, KSvcAfter=300;
+
+#ifdef RB_TIMER_CAPTURE
+#include "timer_capture.h"
+#endif
+
+static TInt WatchService(TAny* user){
+	TUint32 now=NKern::TickCount();
+	TUint32 target=((now+KSvcPhase)/KSvcPeriod+1)*KSvcPeriod-KSvcPhase;
+#ifdef RB_TIMER_CAPTURE
+	return CaptureTimers(user, target);
+#else
+	(void)user;
+	for(;;){
+		TInt d=(TInt)(target+KSvcAfter-NKern::TickCount());
+		if(d<=0){return KErrNone;}
+		NKern::Sleep(d>1000 ? 1000 : d);
+	}
+#endif
+}
+
 typedef TInt (*TStubFn)(TUint32 aMarkerPhys, TUint32 aVal);
 typedef void (*TVoidFn)(void);
 typedef void (*TBootFn)(TUint32 aEntry, TUint32 aMach, TUint32 aDtb, TUint32 aWdog);
@@ -194,7 +262,12 @@ static void PrepareHw(){
 class DRunBlobChan : public DLogicalChannelBase{
 	public:
 		DRunBlobChan() : iBootChunk(NULL), iBootPhys(0), iBootVirt(0), iBootSize(0), iBootAlloc(0){}
-		virtual ~DRunBlobChan(){}
+		// a booter that quits after AllocBoot must give the block back, else
+		// it stays held until reboot and every next try finds less ram
+		virtual ~DRunBlobChan(){
+			if(iBootChunk){iBootChunk->Close(NULL);}
+			if(iBootAlloc){Epoc::FreePhysicalRam(iBootPhys, iBootAlloc);}
+		}
 		// boot chunk state, kept between AllocBoot/LoadChunk/Boot calls
 		DPlatChunkHw* iBootChunk;
 		TPhysAddr iBootPhys;
@@ -430,6 +503,7 @@ TInt DRunBlobChan::Request(TInt aFunction, TAny* a1, TAny* a2){
 
 	// booter: AllocBoot / LoadChunk / Boot
 	if(aFunction==RRunBlob::EControlAllocBoot){
+		gCalibStartTick=NKern::TickCount();
 		TUint32 size=0;
 		TInt rr=Kern::ThreadRawRead(&Kern::CurrentThread(), a1, &size, 4);
 		if(rr!=KErrNone){return rr;}
@@ -456,17 +530,26 @@ TInt DRunBlobChan::Request(TInt aFunction, TAny* a1, TAny* a2){
 		static const TUint32 KSizes[]={0xa000000u, 0x9000000u, 0x8000000u, 0x7000000u, 0x6000000u, 0x5000000u, 0x4000000u, 0x3000000u, 0x2000000u};
 		const TUint32 KLo=0x11600000u, KHi=0x1a000000u;
 		TInt r=KErrNoMemory;
-		TPhysAddr held[4];
-		TUint32 heldsz[4];
-		TInt nheld=0;
-		for(TUint k=0; r!=KErrNone && k<sizeof(KSizes)/sizeof(KSizes[0]); ++k){
-			TPhysAddr p=0;
-			if(Epoc::AllocPhysicalRam((TInt)KSizes[k], p, 21)!=KErrNone){continue;}
-			if(p>=KLo && p<=KHi && p+KSizes[k]<=0x1f000000u){iBootPhys=p; size=KSizes[k]; r=KErrNone;}
-			else if(nheld<4){held[nheld]=p; heldsz[nheld++]=KSizes[k];}
-			else{Epoc::FreePhysicalRam(p, (TInt)KSizes[k]);}
+		// symbian's free ram is fragmented by movable pages and the paging cache,
+		// so between rounds let the kernel compact it (moves movable pages,
+		// drops discardable ones)
+		for(TInt round=0; r!=KErrNone && round<3; ++round){
+			if(round>0){
+				TRamDefragRequest d;
+				d.DefragRam(TRamDefragRequest::KInheritPriority);
+			}
+			TPhysAddr held[4];
+			TUint32 heldsz[4];
+			TInt nheld=0;
+			for(TUint k=0; r!=KErrNone && k<sizeof(KSizes)/sizeof(KSizes[0]); ++k){
+				TPhysAddr p=0;
+				if(Epoc::AllocPhysicalRam((TInt)KSizes[k], p, 21)!=KErrNone){continue;}
+				if(p>=KLo && p<=KHi && p+KSizes[k]<=0x1f000000u){iBootPhys=p; size=KSizes[k]; r=KErrNone;}
+				else if(nheld<4){held[nheld]=p; heldsz[nheld++]=KSizes[k];}
+				else{Epoc::FreePhysicalRam(p, (TInt)KSizes[k]);}
+			}
+			for(TInt i=0; i<nheld; ++i){Epoc::FreePhysicalRam(held[i], (TInt)heldsz[i]);}
 		}
-		for(TInt i=0; i<nheld; ++i){Epoc::FreePhysicalRam(held[i], (TInt)heldsz[i]);}
 		if(r!=KErrNone){return KErrNoMemory;}
 		// all of it stays allocated (no symbian buffers in linux's ram), only
 		// the first 32 mb (Image + dtb) get mapped
@@ -539,10 +622,24 @@ TInt DRunBlobChan::Request(TInt aFunction, TAny* a1, TAny* a2){
 		DPlatChunkHw* hc=NULL;
 		if(DPlatChunkHw::New(hc, KIsaHandoffPhys, KIsaHandoffSz, EMapAttrSupRw|EMapAttrFullyBlocking)!=KErrNone){hc=NULL;}
 
+#ifdef RB_CALIB_KICK
+		// send securitykext's periodic request now
+		if(*(volatile TUint32*)KSecKextObj){ // FUN_80140ea4 faults without it
+			TUint32 req[3]={0, 0, 9};
+			typedef TInt (*TSecReq)(TUint32*);
+			gCalibKick=((TSecReq)0x80140ea4u)(req);
+			gCalibKickFc=FastCounter();
+		}
+#endif
+
 		// last things while the c6 window is still mapped. irqs off so no symbian
 		// code runs after this (the bt stack would gate the uart again)
 		NKern::DisableAllInterrupts();
-		if(hc){SaveIsaHandoff((volatile TUint32*)hc->LinearAddress()); Dsb();}
+		if(hc){
+			SaveIsaHandoff((volatile TUint32*)hc->LinearAddress());
+			WriteCalib((volatile TUint32*)hc->LinearAddress());
+			Dsb();
+		}
 		PrepareHw();
 
 		TBootFn fn=(TBootFn)sp;
@@ -635,6 +732,7 @@ TInt DRunBlobChan::Request(TInt aFunction, TAny* a1, TAny* a2){
 		TUint32 cmd=0;
 		for(TUint32 i=0; i<iters; ++i){cmd=d[0]; if(cmd!=0){break;}}
 		if(cmd==0){return 0;}
+		TUint32 fcCatch=FastCounter(); // first, as close to the catch as possible
 		TUint32 out[40];
 		for(TInt k=0; k<40; ++k){out[k]=0;}
 		for(TInt k=0; k<6; ++k){out[k]=d[k];} // descriptor: cmd,PAid,w2,reqphys,respphys,flag
@@ -645,6 +743,10 @@ TInt DRunBlobChan::Request(TInt aFunction, TAny* a1, TAny* a2){
 			volatile TUint32* rb=(volatile TUint32*)(0xc6700000u+(reqp-0x1ffe0000u));
 			for(TInt k=0; k<16; ++k){out[22+k]=rb[k];} // reqbuf 0x40 bytes
 		}
+		out[38]=fcCatch; // words 38/39 were unused, snooppoll_app ignores them
+		out[39]=++gCalibCount;
+		gCalibFc=fcCatch;
+		for(TInt k=0; k<40; ++k){gCalibSnap[k]=out[k];}
 		TPtrC8 src((const TUint8*)out, sizeof(out));
 		Kern::ThreadDesWrite(&Kern::CurrentThread(), a1, src, 0);
 		return 1;
@@ -884,6 +986,8 @@ TInt DRunBlobChan::Request(TInt aFunction, TAny* a1, TAny* a2){
 	// (EMapAttrFullyBlocking = device/strongly-ordered) mapping, so each poll sees
 	// the live register (cached ReadPhys would return a stale first value for
 	// mmio). write the word to *a2. for watching the modem/ISA keepalive register.
+	if(aFunction==RRunBlob::EControlWatchService){return WatchService(a1);}
+
 	if(aFunction==RRunBlob::EControlPeek){
 		TUint32 phys=(TUint32)a1;
 		TUint32 base=phys&~0xfffu;

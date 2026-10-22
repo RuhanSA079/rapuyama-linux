@@ -57,5 +57,7 @@ USB gadget serial shell, confirmed on the device with `picocom`.
 This is an early userspace bring-up rather than a complete phone port. Many peripheral drivers and board functions remain incomplete or unvalidated.
 For the separate E6 board DTB build and phone boot procedure, see [`../boot/README.md`](../boot/README.md).
 
+The former 240-second reset is fixed on E6 hardware with kernel **#196**: `arch/arm/mach-rapuyama/secure_wdt.c` and `secure_wdt_call.S` service **PA_SWD command 0x1f** using the preserved firmware context. Enable the bridge with **`e6.swd=1`** in the boot DTB; it is disabled by default and firmware-specific. Four successful calls were reported through **648.158660 s** with a working USB shell. See [the validated artifacts and boot instructions](../../docs/modem-reset-findings.md#use-the-confirmed-fix).
+
 ## Why the RPi1 base and not multi_v7
 ARM1176 is ARMv6K, NOT v7. `multi_v7_defconfig` produces code with v7 instructions -> undefined instruction on the E6. So strictly a V6 config (bcm2835).

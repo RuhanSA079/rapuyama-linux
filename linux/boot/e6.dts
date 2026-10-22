@@ -112,6 +112,15 @@
 			#clock-cells = <0>;
 			clock-frequency = <24000000>;
 		};
+		/* mmc functional clock, power_resources FUN_800c7fc0 types 0x23/0x24:
+		 * pll 192 mhz / (0x20033010 bits 11:10 / 3:2 + 1) = /2 with the 0x4494
+		 * symbian leaves, or 38.4 mhz if 0x20033090 bit 1/2 picks it. the
+		 * higher one is the safe guess, a lower real rate only slows the card */
+		mmc_fclk: mmc-fclk {
+			compatible = "fixed-clock";
+			#clock-cells = <0>;
+			clock-frequency = <96000000>;
+		};
 	};
 
 	soc {
@@ -169,29 +178,28 @@
 
 		/* EPBUSMV.DLL: two TI OMAP1/2420 style mmc controllers, tables at
 		 * 0x80164558 (base 0/0x100), 0x80164568 (irq 0xad/0xab), 0x80164578
-		 * (power resource 0x23/0x24 = direct gates). N8 schematic: microSD
-		 * on MMC2. fclk rate unknown (gates hang off the 24 mhz i2c clock
-		 * here), so max-frequency is kept low. off until tested */
+		 * (power resource 0x23/0x24, named EHwClkASIBT/ASIMusti but these
+		 * are the ones EPBUSMV turns on). N8 schematic: microSD on MMC2.
+		 * symbian clocks cards at most 24 mhz (min(0x80163b60 = 48, 24)) */
 		mmc1: mmc@20032800 {
-			compatible = "ti,omap2420-mmc";
+			compatible = "nokia,rapuyama-mmc", "ti,omap2420-mmc";
 			reg = <0x20032800 0x80>;
 			interrupts = <173>;
-			clocks = <&cgc 0x23>, <&cgc 0x23>;
+			clocks = <&cgc 0x23>, <&mmc_fclk>;
 			clock-names = "ick", "fck";
 			bus-width = <4>;
-			max-frequency = <6000000>;
-			status = "disabled";
+			broken-cd;
+			max-frequency = <24000000>;
 		};
 
 		mmc2: mmc@20032900 {
-			compatible = "ti,omap2420-mmc";
+			compatible = "nokia,rapuyama-mmc", "ti,omap2420-mmc";
 			reg = <0x20032900 0x80>;
 			interrupts = <171>;
-			clocks = <&cgc 0x24>, <&cgc 0x24>;
+			clocks = <&cgc 0x24>, <&mmc_fclk>;
 			clock-names = "ick", "fck";
 			bus-width = <4>;
-			max-frequency = <6000000>;
-			status = "disabled";
+			max-frequency = <24000000>;
 		};
 
 		/* bc02_uart1.PDD, the uart to the bluetooth chip (earlycon only) */

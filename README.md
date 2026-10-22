@@ -8,7 +8,9 @@
 This project takes over the phone from a running Symbian installation, hands control to an ARM Linux kernel, and brings up the RapuYama application SoC.
 It combines Symbian-side loaders and hardware probes, reverse engineering of Nokia's firmware, and experimental Linux drivers.
 
-> **Current status: Linux boots on the phone and draws on its screen.** The first boot log shows the RapuYama interrupt controller receiving the timer IRQ, the kernel switching to its RapuYama clocksource, and BusyBox `/init` starting. An interactive shell runs over USB serial. Linux now also boots the Broadcom VideoCore itself, powers the LCD panel up and shows a framebuffer console on the phone's own display (see [the first display log](docs/first-display_SUCCESS.log)).
+> **Current status: Linux runs Wayland and GLES 2 on the phone.** The kernel boots the Broadcom VideoCore itself, powers the LCD panel up and drives it as a small KMS device: weston + foot run on the phone's own display, typed on the hardware keypad, with a working touchscreen. Userspace GLES 2 is rendered by the VideoCore's own GL server through `libvcgl` (a turning triangle at 170-250 fps, textures work). An interactive shell also runs over USB serial.
+
+The former 240-second reset is **fixed on the Nokia E6**: Linux now services the secure PA_SWD watchdog. Kernel #196 completed four successful calls through 648 seconds on hardware ([console log](docs/secure-watchdog_SUCCESS.txt), [fix and boot instructions](docs/modem-reset-findings.md#use-the-confirmed-fix)). Enable it with `e6.swd=1`; it is currently opt-in.
 
 ## Milestones
 
@@ -17,6 +19,13 @@ It combines Symbian-side loaders and hardware probes, reverse engineering of Nok
 | 13.10.2026 | Kernel boots through to BusyBox `/init` ([log](docs/first-boot_SUCCESS.log)) |
 | 13.10.2026 | Interactive shell over the USB gadget serial port |
 | 14.10.2026 | First image on the E6 panel from Linux: VideoCore booted by the kernel, `/dev/fb0` + fbcon ([log](docs/first-display_SUCCESS.log), [notes](docs/videocore-display.md)) |
+| 18.10.2026 | `e6bfix` loader boots the uncompressed `Image` in place, big kernels boot every time ([notes](linux/boot/README.md#e6bfix-boot-the-image-in-place-18102026)) |
+| 18.10.2026 | Wayland on the phone: weston + foot on the VideoCore KMS driver, gfx DMA + RGB565 (~9-16 fps) ([notes](docs/videocore-display.md#wayland-runs-on-the-phone-since-18102026)) |
+| 18.10.2026 | Hardware keypad: TC3589x on I2C, own polled driver + E6 xkb layout |
+| 19.10.2026 | First frame rendered by the VideoCore GL server, then GLES 2 from userspace through `libvcgl` + `/dev/vc-khrn` ([notes](docs/videocore-display.md#drawing-on-the-videocore-works-since-19102026)) |
+| 19.10.2026 | Touchscreen: Atmel maXTouch on I2C, multitouch |
+| 22.10.2026 | SD card and internal eMMC enumerate under Linux (read-only use for now, [notes](docs/driver-re.md#sd--mmc-epbusmvdll)) |
+| 22.10.2026 | 240-second reset fixed: PA_SWD secure watchdog serviced from Linux, four successful calls through 648 s ([log](docs/secure-watchdog_SUCCESS.txt)) |
 
 ## The hardware
 
@@ -26,6 +35,8 @@ It combines Symbian-side loaders and hardware probes, reverse engineering of Nok
 | SoC | Nokia RapuYama |
 | RAM | 256 MiB at physical `0x10000000` |
 | Display | Broadcom BCM2727B1 / VideoCore III, 640x480 panel (id `01 8b 79`), driven over the ViSSI host bus |
+| Input | Toshiba TC3589x keypad (I2C `0x44`), Atmel maXTouch touchscreen (I2C `0x4a`) |
+| Storage | removable microSD + internal HYNIX eMMC on two TI OMAP style MMC controllers |
 | Boot environment | Symbian^3 / EKA2, with a one-way handoff to Linux |
 | Kernel | Linux 6.12, built for ARMv6 |
 
@@ -35,12 +46,15 @@ This is a device-specific port, not a generic EKA2 compatibility layer. Some wor
 
 - **Symbian takeover and probes** - inspect memory mappings and peripheral registers, run small ARM payloads, and transfer control to Linux.
 - **Linux kernel port** - an ARMv6 kernel configuration plus experimental RapuYama support for interrupt handling, timers, GPIO, clocks, watchdog, UART, and other peripherals.
-- **VideoCore display driver** - boots the BCM2727B1 with Nokia's firmware (extracted from your own ROM dump), speaks VCHI to it, powers the panel up like Symbian and exposes `/dev/fb0` with fbcon.
+- **VideoCore display driver** - boots the BCM2727B1 with Nokia's firmware (extracted from your own ROM dump), speaks VCHI to it, powers the panel up like Symbian and exposes a KMS device (`/dev/dri/card0`, `/dev/fb0` with fbcon) for weston.
+- **GLES 2 on the VideoCore** - `/dev/vc-khrn` in the display driver passes KHRN/DISP messages to the VideoCore's own GL server, `linux/vc-khrn/libvcgl.so` is the EGL 1.4 + GLES 2 client library for it.
+- **Input drivers** - polled TC3589x keypad and maXTouch touchscreen drivers, keypad layout in `linux/initramfs/xkb-e6`.
+- **Secure watchdog bridge** - services the PA_SWD watchdog from Linux so the phone no longer resets after 240 seconds.
 - **Symbian display-stack emulator** - runs Nokia's display drivers from the ROM in Unicorn and records every message they send to the VideoCore; the Linux driver replays those sequences.
 - **RAM-backed early logging** - preserve early kernel output in reserved RAM so it can be retrieved after a failed boot, even without a serial console.
 - **Hardware notes** - reverse-engineering results from firmware analysis and live probes.
 
-The basic boot, timer/IRQ path, initramfs userspace, USB serial shell and the VideoCore display have been exercised on the phone. Other devices and drivers remain experimental, their presence in the tree does not imply that they have been validated on hardware.
+The basic boot, timer/IRQ path, initramfs userspace, USB serial shell, the VideoCore display with weston and GLES 2, keypad, touchscreen, MMC enumeration and the secure watchdog bridge have been exercised on the phone. Other devices and drivers remain experimental, their presence in the tree does not imply that they have been validated on hardware.
 
 ## Build the kernel
 
@@ -75,18 +89,17 @@ The resulting `linux/boot/e6.dtb` is the board description to pair with the kern
 
 ```text
 Symbian
-  |_ boot.sis / boot.exe
-       |_ loads zImage and e6.dtb into physical RAM
+  |_ e6bfix.sis / e6calb.sis
+       |_ allocates the biggest free physical block
+       |_ loads E:\Image (uncompressed) at block + 0x8000, E:\e6.dtb at block + 0x1f00000
        |_ prepares the handoff (MMU and caches off)
        |_ jumps to the Linux ARM kernel
             |_ early log is captured in reserved RAM
 ```
 
-The loader places the kernel image and DTB in a contiguous physical chunk and passes the DTB address to Linux. The E6 kernel is configured with the fixed physical RAM base `0x10000000`.This avoids deriving the kernel's memory base
-from the loader's variable chunk address.
+The kernel runs in place where it was loaded: `ARM_PATCH_PHYS_VIRT` makes the block `PHYS_OFFSET`, Linux drops the RAM below it. `e6calb.sis` is the same loader, it also times the handoff right after a Symbian PA_SWD service and is the one to use with `e6.swd=1`. The older `e6boot.sis` (zImage, fixed decompression address) still exists but big kernels die at random boots with it.
 
-The phone-side package and boot sequence are documented in
-[`linux/boot/README.md`](linux/boot/README.md). That guide includes the expected files, recovery/diagnostic notes, and the distinction between normal and probe images. Do not mistake a diagnostic probe image for the regular `zImage`.
+The phone-side package and boot sequence are documented in [`linux/boot/README.md`](linux/boot/README.md). That guide includes the expected files, recovery/diagnostic notes, and the distinction between normal and probe images. Do not mistake a diagnostic probe image for the regular kernel.
 
 For the interactive USB shell, use the USB-enabled DTB as `E:\e6.dtb`, connect the phone to the host over USB, and start the boot package. On a Linux host, connect to the enumerated gadget serial port, typically:
 
@@ -104,7 +117,9 @@ The shell runs on the phone's `ttyGS0`. `picocom` provides the host-side termina
 KERN_BIN=/path/to/kern.bin linux/kernel/build-vc.sh
 ```
 
-Boot `linux/kernel/build-vc/arch/arm/boot/zImage` with `linux/kernel/build-vc/e6-vc.dtb` (as `E:\zImage` / `E:\e6.dtb`). After about 5 seconds the panel shows colour bars for 3 seconds, then the console. Driver parameters, the bring-up sequence and known issues are in S[`docs/videocore-display.md`](docs/videocore-display.md).
+Daily set: `linux/kernel/build-vc/arch/arm/boot/Image` + `linux/kernel/build-vc/e6-vc-565.dtb` (gfx DMA + RGB565) as `E:\Image` / `E:\e6.dtb`, booted with `e6bfix.sis` or `e6calb.sis`. The script also builds `e6-vc.dtb` (XRGB8888), `e6-vc-khrn.dtb` and `e6-vc-gl.dtb` (VideoCore GL checks). Add `e6.swd=1` to the bootargs for runs longer than 240 seconds. Driver parameters, weston, GLES 2, the bring-up sequence and known issues are in [`docs/videocore-display.md`](docs/videocore-display.md).
+
+GLES 2 userspace (`libvcgl`, `khrntest`, `vctri`) is built by `linux/vc-khrn/build.sh` against the alpine sysroot from `linux/initramfs/sysroot.sh`.
 
 ## Repository map
 
@@ -112,11 +127,12 @@ Boot `linux/kernel/build-vc/arch/arm/boot/zImage` with `linux/kernel/build-vc/e6
 | --- | --- |
 | [`linux/kernel/`](linux/kernel/) | Kernel configuration, build script, and kernel source submodule |
 | [`linux/boot/`](linux/boot/) | E6 DTS, trampoline, and boot documentation |
+| [`linux/initramfs/`](linux/initramfs/) | Initramfs: BusyBox init, alpine armhf userspace with weston, xkb layout, sysroot script |
+| [`linux/vc-khrn/`](linux/vc-khrn/) | `libvcgl` (EGL + GLES 2 over `/dev/vc-khrn`) and its test programs |
 | [`linux/stage0/`](linux/stage0/) | Symbian-side loader and low-level experiments |
 | [`driver/`](driver/) | Symbian kernel drivers, SIS packaging, and deployment notes |
 | [`tools/`](tools/) | Log parsers and reverse-engineering utilities |
 | [`docs/`](docs/) | Hardware maps, driver notes, investigation reports, and the porting guide |
-| [`logs/`](logs/) | Captured output from experiments |
 
 ## Notes and references
 
@@ -133,7 +149,9 @@ Boot `linux/kernel/build-vc/arch/arm/boot/zImage` with `linux/kernel/build-vc/e6
 ## Current boundaries
 
 - This is an early userspace bring-up, not yet a complete everyday phone OS.
-- The display works, but is new: there are visible artifacts, every update sends the full 1.2 MB frame over PIO (~170 ms), and blanking/backlight control are not implemented. The display comes up about 5 seconds into boot, so use the USB shell or the RAM log for early messages.
+- Pushing pixels is slow: the ViSSI bus does ~7 MB/s, so weston (pixman) gets ~9-16 fps in RGB565 and the VideoCore ignores partial write rects. Fast UI has to be rendered on the VideoCore (GLES 2). `libvcgl` has one config (RGB565, no depth/stencil), one buffer per window and no VC-to-host bulk transfers yet (no glReadPixels, info logs). Blanking/backlight control are not implemented. The display comes up a few seconds into boot, so use the USB shell or the RAM log for early messages.
+- Storage is read-only for now: the SD card retry fix is not validated on hardware, and the internal eMMC is Symbian's `E:` drive - never write to it.
+- The PA_SWD bridge is opt-in (`e6.swd=1`) and validated only with the E6 firmware context and the e6calb loader. Modem, radio, audio and power key are not supported.
 - Treat register addresses and undocumented peripheral behavior as hypotheses unless the notes explicitly say they were checked on live hardware.
 - A successful boot does not imply that every peripheral or power-management path is implemented.
 - The boot handoff is one-way. A failed run may require the phone's watchdog reset to recover.

@@ -27,7 +27,7 @@ From the firmware MMU peripheral mapping table (core-bin file `0x13c2f9c`, ROM v
 
 | c6 virt | phys | live size | What |
 |---|---|---|---|
-| `c6018000` | **`0x30000000`** | 16K | sys/clock controller: indexed regs + pointer table + a LUT. **watchdog suspect** |
+| `c6018000` | **`0x30000000`** | 16K | sys/clock controller: indexed regs + pointer table + a LUT. function not established |
 | `c6050000` | `0x40000000` | 4K | NOT hardware: kernel debug trace buffer in ram (`Kern::Printf` lands here) |
 | `c6f00000` | **`0x40100000`** | 1M | XTI trace port (xtitx/xtiwriter), write-only, reads `FF` |
 | `c6070000` | `0xfffd0000` | 64K | exception vectors + thumb handler code |
@@ -94,10 +94,13 @@ image loads at `0x10008000` and is 19,643,844 bytes, covering
 preserving or mapping the framebuffer alone would not refresh it after handoff.
 
 ## Watchdog
-Exists (`CWatchdog`, `CWatchdogTimer`, `ShutdownWatchDog`, `mdswatchdog.exe`), resets
-the phone seconds after symbian dies. Register is HAL-abstracted, prime suspect is
-sysctrl `0x30000000`. `driver/wdfind.sis` (TimedDiff) is built to find the
-free-running counters there, not run yet.
+Three watchdogs must be serviced after handoff:
+
+- SoC counter at **`0x200336c4`**, approximately 13 s if unfed; reload `0x3fffffff`.
+- PMIC watchdog over CBUS at **`0x20030700`**, device 1 hardware register **`0x17`**, reload **`0x30`** (48 s). Logical firmware register index is `0x13`.
+- Secure **PA_SWD command `0x1f`**, returning a **240 s** timeout. ISASW normally rearms at timeout minus 30 s. Linux services it through the preserved firmware context with **`e6.swd=1`**.
+
+`drivers/watchdog/rapuyama_wdt.c` handles the first two; `arch/arm/mach-rapuyama/secure_wdt.c` and `secure_wdt_call.S` handle PA_SWD. The secure watchdog was the missing source of the former 240-second resets, fixed on E6 hardware with kernel #196 on 22.10.2026 ([evidence and implementation](modem-reset-findings.md)). The old `0x30000000` watchdog suspicion was not the identified source.
 
 ## History
 - v2 rebooted: wrong TTBR0 mask (16 KB instead of 8 KB with N=1) -> mapped a foreign phys address.

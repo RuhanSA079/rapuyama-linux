@@ -14,7 +14,7 @@ fbcon runs on it, so the kernel console and the shell are visible on the phone i
 
 ## Wayland (runs on the phone since 18.10.2026)
 
-Daily config: `out/Image` + `out/e6-vc-565.dtb` (`videocore.dma=1 videocore.rgb565=1`), booted with `e6bfix.sis` (see [`../linux/boot/README.md`](../linux/boot/README.md)). ~9-16 fps full screen, picture correct.
+Daily config: `Image` + `e6-vc-565.dtb` from `build-vc.sh` (`videocore.dma=1 videocore.rgb565=1`), booted with `e6bfix.sis` (see [`../linux/boot/README.md`](../linux/boot/README.md)). ~9-16 fps full screen, picture correct.
 
 - the fbdev layer of `videocore.c` is a tiny KMS driver (simple display pipe, gem shmem, shadow plane, `late_initcall` so drm core is up first). a commit copies the damage into `vc->fb` and wakes the push thread. fake vblank events, 60 Hz mode, frames that come faster than the bus are merged
 - weston sends a commit with no damage clips before every real one, the helper calls that a full screen update -> 0-clip commits are diffed row by row against `vc->fb`
@@ -44,7 +44,7 @@ Why Symbian is fast: S^3 renders on the VideoCore (OpenVG / GLES), the ARM sends
 
 ## Drawing on the VideoCore (works since 19.10.2026)
 
-The VC renders GLES 2 itself and shows the result, no pixels on the bus. `videocore.khrn_draw=1` (`out/e6-vc-gl.dtb`): a 320x240 magenta square in the middle for 10 s, ~21 s after boot.
+The VC renders GLES 2 itself and shows the result, no pixels on the bus. `videocore.khrn_draw=1` (`e6-vc-gl.dtb`): a 320x240 magenta square in the middle for 10 s, ~21 s after boot.
 
 The GL server in `vc-main` speaks the raspberry pi khronos rpc (KHRN, KHHN, KHAN, merge buffer with a make current prefix), but it is VC III:
 
@@ -70,7 +70,7 @@ The GL server in `vc-main` speaks the raspberry pi khronos rpc (KHRN, KHHN, KHAN
 
 Tools: `vc-main` disassembles with the vc4 binutils (itszor/binutils-vc4, `objdump -D -b binary -m vc4`, load address 0, gp `0xde5a0`). the exported symbol table (`{addr, name}` pairs near `0xe8xxx`) names the rtos and libc functions, the dispman command table is at gp+`0xe3e0` (`{handler, min, max args}` for ops `0..0x27`).
 
-Path 2 (VC composition only): dispman `0x17` ElementChangeAttributes (vcdispman FUN_80346198): `{update, element, flags, layer, opacity, mask, transform, [dest rect], [src rect 16.16]}`, flags dest `1<<2`, src `1<<3`. moving the src rect = scrolling with no pixels on the bus (`videocore.disp_probe=1`, `out/e6-vc-khrn.dtb`).
+Path 2 (VC composition only): dispman `0x17` ElementChangeAttributes (vcdispman FUN_80346198): `{update, element, flags, layer, opacity, mask, transform, [dest rect], [src rect 16.16]}`, flags dest `1<<2`, src `1<<3`. moving the src rect = scrolling with no pixels on the bus (`videocore.disp_probe=1`, `e6-vc-khrn.dtb`).
 
 The qemu VC model (`work/qt/run.py`, `E6_VC_STATS=1`) matches the phone's MMIO counts, but it is my own model: it only renders type `0x2b`, places writes by the dst rect (the phone does not) and says yes to every service. It checks the driver, not the VC.
 

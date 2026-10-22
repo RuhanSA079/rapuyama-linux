@@ -58,7 +58,8 @@ class RRunBlob : public RBusLogicalChannel{
 			EControlSnoopPoll, EControlHookInstall, EControlHookRead, EControlHookRemove,
 			EControlHookCbus, EControlHookCbusRead, EControlHookCbusRemove,
 			EControlModemReset, EControlPeek,
-			EControlHookBeac8, EControlHookBeac8Read, EControlHookBeac8Remove};
+			EControlHookBeac8, EControlHookBeac8Read, EControlHookBeac8Remove,
+			EControlWatchService};
 	#ifndef __KERNEL_MODE__
 		TInt Open(){return DoCreate(KRunBlobName, TVersion(1,0,0), KNullUnit, NULL, NULL);}
 		TInt Run(TDes8& aBuf){return DoControl(EControlRunBlob, (TAny*)&aBuf);}
@@ -137,6 +138,10 @@ class RRunBlob : public RBusLogicalChannel{
 		TInt HookBeac8(){return DoControl(EControlHookBeac8, NULL);}
 		TInt HookBeac8Read(TDes8& aBuf){return DoControl(EControlHookBeac8Read, (TAny*)&aBuf);}
 		TInt HookBeac8Remove(){return DoControl(EControlHookBeac8Remove, NULL);}
+
+		// sleep until just before symbian's next ~210 s reset service (tick
+		// 210000*k - 900 ms), record every thread's cpu time each 200 ms
+		TInt WatchService(TDes8& aBuf){return DoControl(EControlWatchService, (TAny*)&aBuf);}
 
 		// patch karap's cbus-write fn 0x800b8494 to log every PMIC/CBUS write
 		// {dev,reg,val} into a ram ring (ring[0]=count, 16-byte slots at +4).

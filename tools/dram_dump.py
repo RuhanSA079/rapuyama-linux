@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Pull the dram linux leaves alone (below PHYS_OFFSET 0x11600000) off the
-phone through the linux usb shell (ttyGS0 -> /dev/ttyACM0). the decrypted
-modem sw (SOS*ISASW @0x10480000) only exists there, so this is how we get it.
+"""Pull preserved Symbian and modem RAM through the Linux USB shell.
+Reserved shared RAM uses /sys/kernel/debug/rapuyama-shm; memory below
+PHYS_OFFSET 0x11600000 uses an mmap of /dev/mem.
 
 boot out/zImage + out/e6-vc.dtb (has e6.usbsh), plug usb, run this. it saves
 every 256 kb chunk as soon as it arrives and skips chunks it already has, so
@@ -21,16 +21,16 @@ import time
 import tty
 
 CHUNK = 0x40000
-# most useful first: isasw, nloader blobs, symbian kernel data + L2 tables, dsp
+# modem runtime first: the reset can stop the dump before the later regions
 REGIONS = [
-    (0x10480000, 0x10780000),   # SOS*ISASW (cellular mcu sw, arm code)
-    (0x108c0000, 0x10900000),   # PRIMAPP/NPC/CCC/HWC/... small nloader blobs
+    (0x1f8b0000, 0x1fcfd000),   # modem sw ram (c6800000): exact DT reservation
     (0x10000000, 0x10200000),   # symbian kernel data, L2s for c60/c67/c68/c80
     (0x11500000, 0x11600000),   # L2s for c62..c6c, c81, f0d..f0f
+    (0x10480000, 0x10780000),   # SOS*ISASW (cellular mcu sw, arm code)
+    (0x108c0000, 0x10900000),   # PRIMAPP/NPC/CCC/HWC/... small nloader blobs
     (0x10200000, 0x10480000),   # SOS*DSP0 (cdsp)
     (0x10780000, 0x108c0000),
     (0x10900000, 0x11500000),   # rom shadow, we have the rom already
-    (0x1f8b0000, 0x1fd00000),   # modem sw ram (c6800000): scheduler + timer state
 ]
 
 
@@ -43,25 +43,55 @@ def wait_for(fd, pat, tmo):
             raise TimeoutError("no %r, got %r" % (pat, buf[-200:]))
         r, _, _ = select.select([fd], [], [], left)
         if r:
-            buf += os.read(fd, 65536)
+            data = os.read(fd, 65536)
+            if not data:
+                raise ConnectionError("USB shell disconnected")
+            buf += data
     return buf
 
 
 def cmd(fd, s):
-    os.write(fd, s.encode() + b"\r")
+    data = s.encode() + b"\r"
+    while data:
+        n = os.write(fd, data)
+        if n <= 0:
+            raise ConnectionError("USB shell write failed")
+        data = data[n:]
 
 
-def main():
-    dev = sys.argv[1] if len(sys.argv) > 1 else "/dev/ttyACM0"
-    out = sys.argv[2] if len(sys.argv) > 2 else "logs/dram"
-    os.makedirs(out, exist_ok=True)
-    while not os.path.exists(dev):
-        print("waiting for", dev)
-        time.sleep(1)
-    time.sleep(1)
-    fd = os.open(dev, os.O_RDWR | os.O_NOCTTY)
-    tty.setraw(fd)
-    termios.tcflush(fd, termios.TCIOFLUSH)
+def dump_command(addr, size):
+    if 0x1f8b0000 <= addr and addr + size <= 0x1fcfd000:
+        path = "/sys/kernel/debug/rapuyama-shm/1f8b0000"
+        read = "dd if=%s bs=4096 skip=%d count=%d" % (
+            path, (addr - 0x1f8b0000) // 4096, size // 4096)
+    else:
+        read = "/tmp/md %x %x" % (addr, size)
+    # keep the reader's status: a pipeline would report base64's success
+    return ("echo @@$((0))S; %s >/tmp/e6-dram.bin 2>/tmp/e6-dram.err; "
+            "r=$?; if [ \"$r\" -eq 0 ]; then base64 /tmp/e6-dram.bin; fi; "
+            "echo @@$((0))R:$r; cat /tmp/e6-dram.err; echo @@$((0))E" % read)
+
+
+def decode_dump(buf, size):
+    try:
+        payload = buf.split(b"@@0S", 1)[1].split(b"@@0E", 1)[0]
+        encoded, result = payload.split(b"@@0R:", 1)
+        status, _, detail = result.strip().partition(b"\n")
+        code = int(status.strip())
+    except (IndexError, ValueError) as e:
+        raise RuntimeError("invalid dump response: %r" % buf[-300:]) from e
+    if code:
+        raise RuntimeError("reader exited %d: %s" % (code, detail.decode(errors="replace").strip()))
+    try:
+        data = base64.b64decode(b"".join(encoded.split()), validate=True)
+    except binascii.Error as e:
+        raise RuntimeError("invalid base64 in dump") from e
+    if len(data) != size:
+        raise RuntimeError("reader returned %d bytes, expected %d" % (len(data), size))
+    return data
+
+
+def dump(fd, out):
     # e6sh eats lines until an empty one, a running sh just ignores it.
     # $((..)) so the reply marker never matches the echoed command itself
     cmd(fd, "")
@@ -86,32 +116,55 @@ def main():
     if hashlib.md5(blob).hexdigest().encode() not in r:
         raise SystemExit("memdump upload broken: %r" % r[-200:])
     print("memdump uploaded")
+    cmd(fd, "mount -t debugfs debugfs /sys/kernel/debug 2>/dev/null; "
+            "test -r /sys/kernel/debug/rapuyama-shm/1f8b0000; "
+            "echo @@$((4))D:$?; echo @@$((4))Z")
+    r = wait_for(fd, b"@@4Z", 15)
+    if r.split(b"@@4D:", 1)[1].splitlines()[0].strip() != b"0":
+        raise SystemExit("modem RAM dump file missing; boot the Image with rapuyama-shm debugfs support")
     t0 = time.time()
     got = 0
     for lo, hi in REGIONS:
         for a in range(lo, hi, CHUNK):
+            size = min(CHUNK, hi - a)
             fn = os.path.join(out, "%08x.bin" % a)
-            if os.path.exists(fn) and os.path.getsize(fn) == CHUNK:
+            if os.path.exists(fn) and os.path.getsize(fn) == size:
                 continue
-            cmd(fd, "echo @@$((0))S; /tmp/md %x %x | base64; echo @@$((0))E" % (a, CHUNK))
+            cmd(fd, dump_command(a, size))
             buf = wait_for(fd, b"@@0E", 60)
-            s = buf.find(b"@@0S")
-            txt = buf[s + 4:buf.rfind(b"@@0E")]
             try:
-                data = base64.b64decode(txt)
-            except binascii.Error:
-                data = b""
-            if len(data) != CHUNK:
-                print(txt[:200])
-                # /dev/mem said no (strict devmem) or the mmap failed
-                print("%08x: got %d bytes, skipping" % (a, len(data)))
-                continue
+                data = decode_dump(buf, size)
+            except RuntimeError as e:
+                raise SystemExit("%08x: %s" % (a, e)) from e
             with open(fn + ".tmp", "wb") as f:
                 f.write(data)
             os.rename(fn + ".tmp", fn)
-            got += CHUNK
+            got += size
             print("%08x ok  %.1f s  %d kb/s" % (a, time.time() - t0, got / 1024 / (time.time() - t0)))
     print("done, chunks in", out)
+
+
+def main():
+    dev = sys.argv[1] if len(sys.argv) > 1 else "/dev/ttyACM0"
+    out = sys.argv[2] if len(sys.argv) > 2 else "logs/dram"
+    os.makedirs(out, exist_ok=True)
+    while not os.path.exists(dev):
+        print("waiting for", dev)
+        time.sleep(1)
+    time.sleep(1)
+    fd = os.open(dev, os.O_RDWR | os.O_NOCTTY)
+    saved = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        termios.tcflush(fd, termios.TCIOFLUSH)
+        dump(fd, out)
+    finally:
+        try:
+            termios.tcsetattr(fd, termios.TCSANOW, saved)
+        except termios.error:
+            pass
+        finally:
+            os.close(fd)
 
 
 if __name__ == "__main__":
