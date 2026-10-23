@@ -1,10 +1,31 @@
-/* the n8 chips i2cdetect found (23.10.2026), see docs/n8-hardware.md: gpio
- * keys, touch, accelerometer, magnetometer, light sensor. only drivers that
- * read or set up a sensor, the two bq2415x chargers (i2c3 0x6a/0x6b), the
- * led driver (0x33) and the headphone amp (0x60) stay off. included after
- * an n8 board file: n8-hw.dts (usb shell), n8-vc-*.dts (display) */
+/*
+ * Nokia N8-00 (RM-596): everything verified on the phone so far (23.10.2026),
+ * see docs/n8-status.md. Boots with n8boot.sis, which reads E:\n8.dtb.
+ *
+ * - SoC base, usb shell, ram log, eMMC, battery adc: e6.dts / e6-usb.dts,
+ *   VideoCore node: e6-vc.dts (same RapuYama SoC and BCM2727 as the E6)
+ * - watchdog with the startup mode word, so reboot goes back to Symbian
+ * - side keys (gpio-keys-polled), Synaptics TM1284 touch (rmi4, polled),
+ *   LIS302DL, AK8974, TSL2563
+ * - VideoCore: loader B (loader A is refused on the N8), bring-up 30 s after
+ *   the boot (started early it powered the phone off). It boots and takes
+ *   frames, but the panel stays dark: the N8 one (360x640 DSI, interface 6)
+ *   needs the N8 panel path in the driver (videocore.panel=n8), not
+ *   verified yet, so this stays on the E6 interface 4 until it is
+ *
+ * Left out on purpose: the E6 keypad (TC3589x) and maXTouch nodes (not on the
+ * N8), the bq2415x chargers (not tested on the N8, boot with a charged
+ * battery), the LED driver, the headphone amp.
+ */
+/include/ "e6-vc.dts"
 
 / {
+	compatible = "nokia,n8", "nokia,rapuyama";
+	model = "Nokia N8-00 (RapuYama)";
+
+	chosen {
+		bootargs = "earlycon=ramcon,0x1f000000 keep_bootcon console=tty0 panic=10 nohlt clk_ignore_unused pd_ignore_unused cma=0 e6.usbsh videocore.debug=1 videocore.loader_b=1 videocore.start_delay=30";
+	};
 	/* all keys go straight to gpios and switch to gnd (schematic p4).
 	 * polled, the gpio irq polarity is not known */
 	gpio-keys {
@@ -43,6 +64,15 @@
 		};
 	};
 };
+
+/* the startup mode word as 4th reg: rebootdriver.ldd sets bits 20-23 before
+ * the soc reset. left at 0 the n8 powers off after a reboot instead of
+ * booting Symbian, 0xe (normal restart) brings it back */
+&{/soc/watchdog@20030700} {
+	reg = <0x20030700 0x40>, <0x200336c4 0x4>, <0x20033114 0x4>,
+	      <0x20040400 0x4>;
+};
+
 
 &i2c0 {
 	status = "okay";

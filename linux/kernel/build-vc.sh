@@ -88,7 +88,7 @@ done
 "$KSRC/scripts/config" --file "$KOUT/.config" --set-val INITRAMFS_ROOT_UID "$(id -u)"
 "$KSRC/scripts/config" --file "$KOUT/.config" --set-val INITRAMFS_ROOT_GID "$(id -g)"
 "$KSRC/scripts/config" --file "$KOUT/.config" --disable INITRAMFS_COMPRESSION_GZIP --enable INITRAMFS_COMPRESSION_XZ
-# n8 chips (linux/boot/n8-hw.dtsi), same as tools/build-n8-kit.sh: idle on
+# n8 chips (linux/boot/n8.dts), same as tools/build-n8-kit.sh: idle on
 # the e6, its dtbs don't name them
 "$KSRC/scripts/config" --file "$KOUT/.config" --enable KEYBOARD_GPIO_POLLED \
 	--enable IIO --enable IIO_BUFFER --enable IIO_TRIGGERED_BUFFER \
@@ -107,7 +107,7 @@ for v in vc vc-565 vc-565-charger vc-khrn vc-gl; do
 		-o "$KOUT/e6-$v.dtb" "$HERE/../boot/e6-$v.dts"
 done
 # other phones on the same soc (docs/other-phones.md)
-for v in n8-vc n8-vc-lb n8-vc-dsi e7-vc; do
+for v in n8 e7-vc; do
 	"$KOUT/scripts/dtc/dtc" -I dts -O dtb -i "$HERE/../boot" \
 		-o "$KOUT/$v.dtb" "$HERE/../boot/$v.dts"
 done

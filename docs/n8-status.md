@@ -1,6 +1,6 @@
 # Nokia N8 (RM-596): hardware status under Linux
 
-State on 23.10.2026, Symbian Anna 024.001, `n8boot` loader, E6 kernel with the N8 additions (`tools/build-n8-kit.sh n8`, `n8-hw.dtb`). Hardware details and evidence are in [`n8-hardware.md`](n8-hardware.md).
+State on 23.10.2026, Symbian Anna 024.001, `n8boot` loader, E6 kernel with the N8 additions (`tools/build-n8-kit.sh n8` or `linux/kernel/build-vc.sh` for the display kernel), one device tree `linux/boot/n8.dts` with everything marked ✅ below. Hardware details and evidence are in [`n8-hardware.md`](n8-hardware.md).
 
 | Status | Meaning |
 | --- | --- |
@@ -57,8 +57,8 @@ State on 23.10.2026, Symbian Anna 024.001, `n8boot` loader, E6 kernel with the N
 
 | Part | Hardware | Status | Notes |
 | --- | --- | --- | --- |
-| VideoCore boot | BCM2727, firmware from the N8 ROM (`vcdriver.dll`) | ✅ works | With **loader B** (`videocore.loader_b=1`, `0x802f0a40`): `loader answered 3/1`, `VideoCore booted`, VCHI, dispman and full-frame bulk transfers work. Loader A is refused (`1/1`). Needs `videocore.start_delay=30`: started early in the boot it powered the phone off. `n8-vc-lb.dts` |
-| LCD panel | 360x640, MIPI DSI 1 lane, behind the VideoCore | 🔬 research | Through display chipset interface 4 (the E6's RGB one) every panel read is `00` (status 0a..0e, id). Next: interface 6 (`videocore.dspc_id=6`, `n8-vc-dsi.dts`), then the DSI setup + init sequence captured from the N8 ROM with `tools/vcemu` |
+| VideoCore boot | BCM2727, firmware from the N8 ROM (`vcdriver.dll`) | ✅ works | With **loader B** (`videocore.loader_b=1`, `0x802f0a40`): `loader answered 3/1`, `VideoCore booted`, VCHI, dispman and full-frame bulk transfers work. Loader A is refused (`1/1`). Needs `videocore.start_delay=30`: started early in the boot it powered the phone off. `n8.dts` |
+| LCD panel | 360x640, MIPI DSI 1 lane, behind the VideoCore | 🔬 research | Through display chipset interface 4 (the E6's RGB one) every panel read is `00` (status 0a..0e, id). Interface 6 (`videocore.dspc_id=6`): the VC tries the panel (error `0x21`) and hangs with the E6 setup. The N8 setup was captured from the ROM (`work/vcemu-n8/`); next: the DSI setup + init sequence captured from the N8 ROM with `tools/vcemu` |
 | Backlight | inside the panel, DCS brightness | 🔬 research | Comes with the panel |
 | GLES 2 (`libvcgl`) | VideoCore GL server | 🔬 research | Works on the E6, follows once the display works |
 | HDMI out | from the VideoCore | 🔬 research | |

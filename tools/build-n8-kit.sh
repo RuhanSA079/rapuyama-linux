@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # builds the n8 / e7 test 1 kit (docs/other-phones.md) in one go:
-# plain usb shell kernel (no videocore, so no kern.bin needed), the
-# n8-usb / e7-usb dtbs, <phone>boot.sis + e6logs.sis, all into out/<phone>-test1/
+# plain usb shell kernel (no videocore, so no kern.bin needed), the n8 /
+# e7-usb dtb, <phone>boot.sis + e6logs.sis, all into out/<phone>-test1/
 # with SHA256SUMS.
 #
 # made for debian/ubuntu hosts: the scripts want fedora's arm-linux-gnu-*,
@@ -81,7 +81,7 @@ done
 echo ">> kernel"
 cp "$ROOT/linux/kernel/e6.config" "$KOUT/.config"
 "$KSRC/scripts/config" --file "$KOUT/.config" --set-str INITRAMFS_SOURCE "$KOUT/initramfs.list"
-# n8 chips (docs/n8-hardware.md, used by n8-hw.dts): gpio keys, lis302dl,
+# n8 chips (docs/n8-hardware.md, used by n8.dts): gpio keys, lis302dl,
 # ak8974, tsl2563, the synaptics rmi4 touchscreen. the e6 dtbs don't name them, so they stay idle there
 "$KSRC/scripts/config" --file "$KOUT/.config" --enable KEYBOARD_GPIO_POLLED \
 	--enable IIO --enable IIO_BUFFER --enable IIO_TRIGGERED_BUFFER \
@@ -92,13 +92,11 @@ make -C "$KSRC" O="$KOUT" olddefconfig >/dev/null
 make -C "$KSRC" O="$KOUT" -j"$(nproc)" Image scripts_dtc
 
 echo ">> dtb"
-# n8-i2c: buses on, no chips (i2cdetect). n8-hw: the chips found that way
-DTBS="$PHONE-usb"
-[ "$PHONE" = n8 ] && DTBS="$DTBS n8-i2c n8-hw"
-for v in $DTBS; do
-	"$KOUT/scripts/dtc/dtc" -q -I dts -O dtb -i "$ROOT/linux/boot" \
-		-o "$KOUT/$v.dtb" "$ROOT/linux/boot/$v.dts"
-done
+# n8: the one n8.dts with everything verified; e7: still the first usb test
+DTS="$PHONE-usb"
+[ "$PHONE" = n8 ] && DTS=n8
+"$KOUT/scripts/dtc/dtc" -q -I dts -O dtb -i "$ROOT/linux/boot" \
+	-o "$KOUT/$PHONE.dtb" "$ROOT/linux/boot/$DTS.dts"
 
 echo ">> loader"
 (cd "$ROOT/linux/stage0/symbian-loader" &&
@@ -111,10 +109,7 @@ echo ">> kit"
 rm -rf "$KIT"
 mkdir -p "$KIT/phone-E-drive" "$KIT/install" "$KIT/pc"
 cp "$KOUT/arch/arm/boot/Image" "$KIT/phone-E-drive/Image"
-cp "$KOUT/$PHONE-usb.dtb" "$KIT/phone-E-drive/$PHONE.dtb"
-# the others: copy one over E:\<phone>.dtb to use it
-mkdir -p "$KIT/phone-E-drive/alt"
-for v in $DTBS; do cp "$KOUT/$v.dtb" "$KIT/phone-E-drive/alt/"; done
+cp "$KOUT/$PHONE.dtb" "$KIT/phone-E-drive/$PHONE.dtb"
 cp "$ROOT/out/${PHONE}boot.sis" "$ROOT/out/e6logs.sis" "$KIT/install/"
 cp "$ROOT/tools/parse_klog.py" "$KIT/pc/"
 cp "$ROOT/docs/other-phones.md" "$KIT/INSTRUCTIONS.md"

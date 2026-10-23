@@ -1,3 +1,0 @@
-/* n8-usb.dts + the n8 chips (n8-hw.dtsi) */
-/include/ "n8-usb.dts"
-/include/ "n8-hw.dtsi"
