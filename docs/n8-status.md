@@ -60,7 +60,7 @@ State on 23.10.2026, Symbian Anna 024.001, `n8boot` loader, E6 kernel with the N
 | VideoCore boot | BCM2727, firmware from the N8 ROM (`vcdriver.dll`) | ✅ works | With **loader B** (`videocore.loader_b=1`, `0x802f0a40`): `loader answered 3/1`, `VideoCore booted`, VCHI, dispman and full-frame bulk transfers work. Loader A is refused (`1/1`). Comes up at ~9 s, no start delay needed any more (`videocore.start_delay=30` was used while the panel setup was wrong). `n8.dts` |
 | LCD panel | 360x640 MIPI DSI, panel id **`fe 94 80`**, behind the VideoCore on interface 6 | ✅ works | `videocore.panel=n8` (kernel patch 0007): the setup captured from the N8 ROM with `tools/vcemu` ported to the N8 (`work/vcemu-n8/`). Panel answers `0a=9c 0b=d4 0c=07`, no DSI errors, `display up, 360x640`, ~4.8 fps with PIO pushes; with `dma=1 rgb565=1` (in `n8.dts`) **weston runs on the panel**, keys and touch work in it. The Samsung block (Nokia: id `fe 80 xx` only) is not sent for this id |
 | Backlight | inside the panel, DCS brightness (`51`) | 🧪 test | Comes on with the panel; `videocore.brightness` sets the `51` value |
-| GLES 2 (`libvcgl`) | VideoCore GL server | 🔬 research | Works on the E6, follows once the display works |
+| GLES 2 (`libvcgl`) | VideoCore GL server | ✅ works | `vctri` draws its rainbow triangle on the panel at ~25 fps (E6: 170-250; the N8 DSI panel takes every frame over one lane). Two timeouts at the start (`KHRN message 0x1`, `DISP 0x80000012`) don't stop it. `libvcgl` takes the screen size from fb0 |
 | HDMI out | from the VideoCore | 🔬 research | |
 
 ## Radios
@@ -91,7 +91,7 @@ State on 23.10.2026, Symbian Anna 024.001, `n8boot` loader, E6 kernel with the N
 
 ## Suggested order
 
-1. GLES (`vctri`: 25 fps, two khrn/dispman timeouts at the start), frame rate with DMA.
+1. Secure watchdog for the N8 firmware (`swddump`), so Linux stays up and a watchdog reset returns to Symbian.
 2. LEDs (`leds-lp5523` at i2c-1 `0x33`), proximity sensor, power key.
 3. Charging (bq2415x, as on the E6).
 4. Secure watchdog for the N8 firmware, so Linux stays up longer than ~4 minutes.
