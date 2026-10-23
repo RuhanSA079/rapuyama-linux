@@ -91,9 +91,8 @@ State on 23.10.2026, Symbian Anna 024.001, `n8boot` loader, E6 kernel with the N
 
 ## Suggested order
 
-1. Secure watchdog for the N8 firmware (`swddump`), so Linux stays up and a watchdog reset returns to Symbian.
+1. Secure watchdog for the N8 firmware (`swddump`), so Linux stays up longer than ~4 minutes and a watchdog reset returns to Symbian.
 2. LEDs (`leds-lp5523` at i2c-1 `0x33`), proximity sensor, power key.
 3. Charging (bq2415x, as on the E6).
-4. Secure watchdog for the N8 firmware, so Linux stays up longer than ~4 minutes.
-5. Bluetooth (UART driver), then WLAN (SPI driver).
-6. Panel bring-up, then GLES, camera, audio.
+4. Bluetooth (UART driver), then WLAN (SPI driver).
+5. Camera, audio, GPS.
