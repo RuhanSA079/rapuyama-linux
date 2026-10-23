@@ -9,5 +9,5 @@ while IFS= read -r l; do
 	[ -z "$l" ] && break
 done
 stty echo
-echo "e6: shell. kernel log: dmesg (-w to follow)"
+echo "e6: shell. kernel log: dmesg, follow it: timeout 120 cat /dev/kmsg"
 exec sh
