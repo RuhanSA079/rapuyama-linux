@@ -92,6 +92,7 @@ void _start(void)
 	struct dev devs[MAX_DEVS];
 	int n, i;
 
+	default_signals();
 	n = open_devs(devs, want);
 	if (!n) {
 		puts_("keytest: no key devices in /dev/input (is gpio-keys in the dtb?)\n");

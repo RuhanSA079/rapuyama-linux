@@ -170,6 +170,7 @@ void _start(void)
 	int n, i;
 	u32 s;
 
+	default_signals();
 	n = open_devs(devs, want);
 	if (!n) {
 		puts_("touchtest: no touchscreen in /dev/input (did the mxt probe? dmesg | grep -i mxt)\n");

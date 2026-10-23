@@ -17,6 +17,7 @@ typedef unsigned char u8;
 #define SYS_close 6
 #define SYS_ioctl 54
 #define SYS_poll 168
+#define SYS_rt_sigaction 174
 
 #define O_RDONLY 0
 #define POLLIN 1
@@ -31,6 +32,21 @@ static inline u32 syscall3(u32 number, u32 arg0, u32 arg1, u32 arg2)
 	__asm__ volatile("svc 0"
 			 : "+r"(r0)
 			 : "r"(r1), "r"(r2), "r"(r7)
+			 : "memory", "cc");
+	return r0;
+}
+
+static inline u32 syscall4(u32 number, u32 arg0, u32 arg1, u32 arg2, u32 arg3)
+{
+	register u32 r0 __asm__("r0") = arg0;
+	register u32 r1 __asm__("r1") = arg1;
+	register u32 r2 __asm__("r2") = arg2;
+	register u32 r3 __asm__("r3") = arg3;
+	register u32 r7 __asm__("r7") = number;
+
+	__asm__ volatile("svc 0"
+			 : "+r"(r0)
+			 : "r"(r1), "r"(r2), "r"(r3), "r"(r7)
 			 : "memory", "cc");
 	return r0;
 }
@@ -66,6 +82,20 @@ static __attribute__((noreturn)) void exit_with_status(u32 status)
 {
 	syscall3(SYS_exit, status, 0, 0);
 	__builtin_unreachable();
+}
+
+/*
+ * init.sh starts the usb shell with "usb_shell &", and a non-interactive sh
+ * ignores SIGINT / SIGQUIT for background jobs. that sticks through getty,
+ * ash and exec, so ctrl-c did nothing. a process may set its own back to
+ * default (all zero = SIG_DFL, ARM struct sigaction + 8 byte sigset)
+ */
+static void default_signals(void)
+{
+	u32 act[5] = { 0 };
+
+	syscall4(SYS_rt_sigaction, 2, (u32)act, 0, 8); /* SIGINT */
+	syscall4(SYS_rt_sigaction, 3, (u32)act, 0, 8); /* SIGQUIT */
 }
 
 /* --- output, line buffered so a slow USB tty gets whole lines --- */

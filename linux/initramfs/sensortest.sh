@@ -2,7 +2,7 @@
 # sensortest: every iio sensor (accelerometer, magnetometer, light, ...) and
 # the battery, one line per sample, in real units:
 #
-#   sensortest          every 500 ms until ctrl-c
+#   sensortest          every 500 ms until Enter
 #   sensortest 200 10   every 200 ms, 10 samples
 #   sensortest list     the devices and their sysfs channels, once
 #
@@ -88,7 +88,7 @@ fi
 for d in $devs; do
 	echo "${d##*/} $(cat "$d/name"): $(chans "$d" | tr '\n' ' ')"
 done
-echo "every $MS ms, ctrl-c to stop"
+echo "every $MS ms, Enter to stop"
 
 n=0
 while [ "$COUNT" = 0 ] || [ "$n" -lt "$COUNT" ]; do
@@ -117,4 +117,7 @@ while [ "$COUNT" = 0 ] || [ "$n" -lt "$COUNT" ]; do
 	echo "$line"
 	n=$((n + 1))
 	usleep $((MS * 1000))
+	# Enter stops it: ctrl-c can't, the usb shell runs with SIGINT ignored
+	# (see default_signals() in evtool.h) and a script can't undo that
+	read -r -t 0 _ && break
 done
