@@ -57,7 +57,7 @@ State on 23.10.2026, Symbian Anna 024.001, `n8boot` loader, E6 kernel with the N
 
 | Part | Hardware | Status | Notes |
 | --- | --- | --- | --- |
-| VideoCore boot | BCM2727, firmware from the N8 ROM (`vcdriver.dll`) | ✅ works | With **loader B** (`videocore.loader_b=1`, `0x802f0a40`): `loader answered 3/1`, `VideoCore booted`, VCHI, dispman and full-frame bulk transfers work. Loader A is refused (`1/1`). Needs `videocore.start_delay=30`: started early in the boot it powered the phone off. `n8.dts` |
+| VideoCore boot | BCM2727, firmware from the N8 ROM (`vcdriver.dll`) | ✅ works | With **loader B** (`videocore.loader_b=1`, `0x802f0a40`): `loader answered 3/1`, `VideoCore booted`, VCHI, dispman and full-frame bulk transfers work. Loader A is refused (`1/1`). Comes up at ~9 s, no start delay needed any more (`videocore.start_delay=30` was used while the panel setup was wrong). `n8.dts` |
 | LCD panel | 360x640 MIPI DSI, panel id **`fe 94 80`**, behind the VideoCore on interface 6 | ✅ works | `videocore.panel=n8` (kernel patch 0007): the setup captured from the N8 ROM with `tools/vcemu` ported to the N8 (`work/vcemu-n8/`). Panel answers `0a=9c 0b=d4 0c=07`, no DSI errors, `display up, 360x640`, ~4.8 fps with PIO pushes (gfx DMA / RGB565 not tried on the N8 yet). The Samsung block (Nokia: id `fe 80 xx` only) is not sent for this id |
 | Backlight | inside the panel, DCS brightness (`51`) | 🧪 test | Comes on with the panel; `videocore.brightness` sets the `51` value |
 | GLES 2 (`libvcgl`) | VideoCore GL server | 🔬 research | Works on the E6, follows once the display works |
