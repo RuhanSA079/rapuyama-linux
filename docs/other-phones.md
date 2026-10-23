@@ -66,6 +66,18 @@ dmesg | grep -i videocore
 ```
 We need the lines `VideoCore booted`, `panel status: ...`, `panel id .. .. ..` and `panel power-up: ...`. The driver only sends standard DCS commands (sleep out, display on, pixel format, brightness), no panel voltage registers. If the screen shows a bright fixed picture for a long time, take the battery out anyway.
 
+## Test 3 (N8): keys, touch and sensors
+
+`tools/build-n8-kit.sh n8` also puts `phone-E-drive/alt/n8-hw.dtb` in the kit: the N8 chips `i2cdetect` found (maXTouch @0x4b, LIS302DL, AMI305 / AK8974, TSL2563, [n8-hardware.md](n8-hardware.md)) plus `gpio-keys-polled` for the side keys. Copy it as `E:\n8.dtb` and boot as in test 1. The initramfs has three test tools:
+
+| Tool | What it shows |
+| --- | --- |
+| `keytest` | Key devices and the keys they have (held ones marked), then every press / release / repeat. Volume up/down, menu, camera, camera focus and the lock slider should all show up |
+| `touchtest` | The touch axis ranges, then one line per frame with every finger. On the last finger up it prints the x/y range that was really touched: drag along all four edges, then compare that with the 360x640 panel to see if the axes are swapped or mirrored |
+| `sensortest` | Every IIO sensor and the battery in real units, every 500 ms (`sensortest 200 10`: every 200 ms, 10 samples; `sensortest list`: the channels). Lying flat, the accelerometer z axis should read about +-9.8 m/s2 |
+
+Stop each one with ctrl-c. They are also in the display kernel (`build-vc.sh`). `keyscan` is the level below `keytest`: raw gpio pins, without the `gpio-keys` driver.
+
 ## Don't
 
 - Don't write to the internal memory from Linux. `mmcblk*` there is the phone's mass memory (`E:`) and possibly a memory card: no `mkfs`, no `mount -o rw`, no `dd` onto it. Read only.

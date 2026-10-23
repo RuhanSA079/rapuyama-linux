@@ -62,6 +62,20 @@ sed -E -e "s#^(file /bin/busybox ).*( 755 0 0)#\1$BB\2#" \
 	-e "s#/[^ ]*/linux/initramfs/#$ROOT/linux/initramfs/#" \
 	"$ROOT/linux/initramfs/initramfs.list" > "$KOUT/initramfs.list"
 
+# input / sensor test tools (linux/initramfs/{keytest,touchtest}.c, sensortest.sh)
+for t in keytest touchtest; do
+	arm-linux-gnu-gcc -march=armv6k -marm -static -nostdlib -fno-pie -no-pie \
+		-ffreestanding -fno-builtin -fomit-frame-pointer -fno-stack-protector \
+		-Os -Wall -Wextra -Werror \
+		-Wl,-e,_start -o "$KOUT/rootfs-extra/$t" "$ROOT/linux/initramfs/$t.c" -lgcc
+done
+{
+	printf '\ndir /usr 755 0 0\ndir /usr/bin 755 0 0\n'
+	printf 'file /usr/bin/keytest %s 755 0 0\n' "$KOUT/rootfs-extra/keytest"
+	printf 'file /usr/bin/touchtest %s 755 0 0\n' "$KOUT/rootfs-extra/touchtest"
+	printf 'file /usr/bin/sensortest %s 755 0 0\n' "$ROOT/linux/initramfs/sensortest.sh"
+} >> "$KOUT/initramfs.list"
+
 echo ">> kernel"
 cp "$ROOT/linux/kernel/e6.config" "$KOUT/.config"
 "$KSRC/scripts/config" --file "$KOUT/.config" --set-str INITRAMFS_SOURCE "$KOUT/initramfs.list"

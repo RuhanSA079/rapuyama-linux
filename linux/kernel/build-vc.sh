@@ -40,11 +40,22 @@ sed -E -e "s#^(file /bin/busybox ).*( 755 0 0)#\1$(realpath "$HERE/../../work/dl
 	-e "s#^(file /sbin/init ).*( 755 0 0)#\1$KOUT/rootfs-extra/init\2#" \
 	-e "s#/[^ ]*/linux/initramfs/#$(realpath "$HERE/../initramfs")/#" \
 	"$HERE/../initramfs/initramfs.list" > "$KOUT/initramfs.list"
+
+# input / sensor test tools (linux/initramfs/{keytest,touchtest}.c, sensortest.sh)
+for t in keytest touchtest; do
+	arm-linux-gnu-gcc -march=armv6k -marm -static -nostdlib -fno-pie -no-pie \
+		-ffreestanding -fno-builtin -fomit-frame-pointer -fno-stack-protector \
+		-Os -Wall -Wextra -Werror \
+		-Wl,-e,_start -o "$KOUT/rootfs-extra/$t" "$HERE/../initramfs/$t.c" -lgcc
+done
 {
 	# the list has no trailing newline, start on a fresh line
 	printf '\ndir /usr 755 0 0\ndir /usr/bin 755 0 0\n'
 	printf 'file /usr/bin/fbtest %s 755 0 0\n' "$KOUT/fbtest"
 	printf 'file /usr/bin/vcprobe %s 755 0 0\n' "$KOUT/vcprobe"
+	printf 'file /usr/bin/keytest %s 755 0 0\n' "$KOUT/rootfs-extra/keytest"
+	printf 'file /usr/bin/touchtest %s 755 0 0\n' "$KOUT/rootfs-extra/touchtest"
+	printf 'file /usr/bin/sensortest %s 755 0 0\n' "$HERE/../initramfs/sensortest.sh"
 	printf 'file /usr/bin/khrntest %s 755 0 0\n' "$KOUT/vc-khrn/khrntest"
 	printf 'file /usr/bin/vctri %s 755 0 0\n' "$KOUT/vc-khrn/vctri"
 	printf 'file /usr/lib/libvcgl.so %s 755 0 0\n' "$KOUT/vc-khrn/libvcgl.so"
