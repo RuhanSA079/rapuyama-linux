@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # builds the n8 / e7 test 1 kit (docs/other-phones.md) in one go:
 # plain usb shell kernel (no videocore, so no kern.bin needed), the
-# n8-usb / e7-usb dtbs, e6bfix.sis + e6logs.sis, all into out/<phone>-test1/
+# n8-usb / e7-usb dtbs, <phone>boot.sis + e6logs.sis, all into out/<phone>-test1/
 # with SHA256SUMS.
 #
 # made for debian/ubuntu hosts: the scripts want fedora's arm-linux-gnu-*,
@@ -18,7 +18,11 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PHONE="${1:-n8}"
-case "$PHONE" in n8|e7) ;; *) echo "usage: $0 [n8|e7]"; exit 1 ;; esac
+case "$PHONE" in
+	n8) BOOT_UID=0xe1000050 ;;
+	e7) BOOT_UID=0xe1000052 ;;
+	*) echo "usage: $0 [n8|e7]"; exit 1 ;;
+esac
 KSRC="$ROOT/linux/kernel/linux"
 KOUT="$ROOT/linux/kernel/build"
 KIT="$ROOT/out/$PHONE-test1"
@@ -81,19 +85,20 @@ done
 
 echo ">> loader"
 (cd "$ROOT/linux/stage0/symbian-loader" &&
-	RB_DEFS=-DRB_IMAGE_BOOT ./build_app.sh e6bfix boot_app.cpp 0xe1000024 &&
+	# e6bfix with its own name, uid and dtb: <phone>boot reads E:\<phone>.dtb
+	RB_DEFS="-DRB_IMAGE_BOOT -DRB_DTB=\"$PHONE\"" \
+		./build_app.sh "${PHONE}boot" boot_app.cpp "$BOOT_UID" &&
 	./build_app.sh e6logs ramread_app.cpp 0xe1000022)
 
 echo ">> kit"
 rm -rf "$KIT"
 mkdir -p "$KIT/phone-E-drive" "$KIT/install" "$KIT/pc"
 cp "$KOUT/arch/arm/boot/Image" "$KIT/phone-E-drive/Image"
-# the loader always reads E:\e6.dtb
-cp "$KOUT/$PHONE-usb.dtb" "$KIT/phone-E-drive/e6.dtb"
-# the others: copy one over E:\e6.dtb to use it
+cp "$KOUT/$PHONE-usb.dtb" "$KIT/phone-E-drive/$PHONE.dtb"
+# the others: copy one over E:\<phone>.dtb to use it
 mkdir -p "$KIT/phone-E-drive/alt"
 for v in $DTBS; do cp "$KOUT/$v.dtb" "$KIT/phone-E-drive/alt/"; done
-cp "$ROOT/out/e6bfix.sis" "$ROOT/out/e6logs.sis" "$KIT/install/"
+cp "$ROOT/out/${PHONE}boot.sis" "$ROOT/out/e6logs.sis" "$KIT/install/"
 cp "$ROOT/tools/parse_klog.py" "$KIT/pc/"
 cp "$ROOT/docs/other-phones.md" "$KIT/INSTRUCTIONS.md"
 (cd "$KIT" && find . -type f ! -name SHA256SUMS ! -name '*.md' | sort | xargs sha256sum > SHA256SUMS)

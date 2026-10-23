@@ -20,7 +20,12 @@ _LIT(KZImage, "E:\\Image");
 #else
 _LIT(KZImage, "E:\\zImage");
 #endif
-_LIT(KDtb, "E:\\e6.dtb");
+// device tree file name on E: (RB_DEFS='-DRB_DTB="n8"' -> E:\n8.dtb), so other phones'
+// loaders (n8boot) read their own dtb instead of the e6 one
+#ifndef RB_DTB
+#define RB_DTB "e6"
+#endif
+_LIT(KDtb, "E:\\" RB_DTB ".dtb");
 
 const TUint32 KZOff=0x00008000; // TEXT_OFFSET
 #ifdef RB_IMAGE_BOOT
