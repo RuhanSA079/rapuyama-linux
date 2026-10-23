@@ -88,6 +88,13 @@ done
 "$KSRC/scripts/config" --file "$KOUT/.config" --set-val INITRAMFS_ROOT_UID "$(id -u)"
 "$KSRC/scripts/config" --file "$KOUT/.config" --set-val INITRAMFS_ROOT_GID "$(id -g)"
 "$KSRC/scripts/config" --file "$KOUT/.config" --disable INITRAMFS_COMPRESSION_GZIP --enable INITRAMFS_COMPRESSION_XZ
+# n8 chips (linux/boot/n8-hw.dtsi), same as tools/build-n8-kit.sh: idle on
+# the e6, its dtbs don't name them
+"$KSRC/scripts/config" --file "$KOUT/.config" --enable KEYBOARD_GPIO_POLLED \
+	--enable IIO --enable IIO_BUFFER --enable IIO_TRIGGERED_BUFFER \
+	--enable IIO_ST_ACCEL_3AXIS --enable IIO_ST_ACCEL_I2C_3AXIS \
+	--enable AK8974 --enable SENSORS_TSL2563 \
+	--enable RMI4_CORE --enable RMI4_I2C --enable RMI4_2D_SENSOR --enable RMI4_F11
 # modem experiments off (drivers/misc/rapuyama_*), they made boots die
 "$KSRC/scripts/config" --file "$KOUT/.config" --disable RAPUYAMA_MODEM
 
