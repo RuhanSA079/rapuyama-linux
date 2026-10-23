@@ -5,6 +5,7 @@
  */
 #include <EGL/egl.h>
 #include <dlfcn.h>
+#include <fcntl.h>
 #include <stdint.h>
 #include <string.h>
 #include <unistd.h>
@@ -12,8 +13,27 @@
 #include "gl.h"
 #include "khrn.h"
 
+/* default window = the whole screen, as the display driver reports it
+ * (E6 640x480, N8 360x640); 640x480 if fb0 isn't there */
 #define SCREEN_W 640
 #define SCREEN_H 480
+
+static void screen_size(int *w, int *h){
+	char buf[32]={0};
+	int fd=open("/sys/class/graphics/fb0/virtual_size", O_RDONLY), x=0, y=0, n;
+	char *p=buf;
+
+	*w=SCREEN_W;
+	*h=SCREEN_H;
+	if(fd<0){return;}
+	n=read(fd, buf, sizeof(buf)-1);
+	close(fd);
+	if(n<=0){return;}
+	while(*p>='0' && *p<='9'){x=x*10+*p++-'0';}
+	if(*p++!=','){return;}
+	while(*p>='0' && *p<='9'){y=y*10+*p++-'0';}
+	if(x>0 && y>0){*w=x; *h=y;}
+}
 #define MAX_SURFACES 4
 #define KEY_BASE 0xe6100000	/* window keys, the driver's own test uses 0xe600000x */
 #define GCE_BASE 0x96000010	/* one-handle GCE surfaces */
@@ -182,8 +202,9 @@ EGLAPI EGLSurface EGLAPIENTRY eglCreateWindowSurface(EGLDisplay dpy, EGLConfig c
 	s->idx=i;
 	s->x=vw ? vw->x : 0;
 	s->y=vw ? vw->y : 0;
-	s->w=vw && vw->width>0 ? vw->width : SCREEN_W;
-	s->h=vw && vw->height>0 ? vw->height : SCREEN_H;
+	screen_size(&s->w, &s->h);
+	if(vw && vw->width>0){s->w=vw->width;}
+	if(vw && vw->height>0){s->h=vw->height;}
 	{
 		/* VC III layout (khclient_vc3 FUN_000096d4), 12 args */
 		uint32_t c[13]={KHRN_EGL_CREATE_SURFACE, KEY_BASE+i, 1, s->w, s->h, KHRN_RGB_565,
