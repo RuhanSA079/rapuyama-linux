@@ -5,7 +5,6 @@ State on 23.10.2026, Symbian Anna 024.001, `n8boot` loader, E6 kernel with the N
 | Status | Meaning |
 | --- | --- |
 | ✅ works | seen working on the N8 |
-| ⚠️ differs | works, but not like on the E6 |
 | 🧪 test | built and in the kit, not run on the N8 yet |
 | 🔧 todo | the hardware and the way to it are known, the Linux side is missing |
 | 🔬 research | needs reverse engineering first, the way to it is still open |
@@ -22,7 +21,7 @@ State on 23.10.2026, Symbian Anna 024.001, `n8boot` loader, E6 kernel with the N
 | SoC + PMIC watchdog | `rapuyama-wdt` | ✅ works | |
 | Secure watchdog (PA_SWD) | modem / secure side | 🔬 research | Linux is reset back to Symbian after 0.5..4 min. The E6 bridge (`e6.swd=1`) uses addresses from the E6 firmware, they have to be found in the N8 ROM |
 | RAM log after a reset | `ramcon` at `0x1f000000`, `e6logs.sis` | ✅ works | Only after a reset: when the phone powers off, the RAM is lost |
-| `reboot` | soc reset `0x20033114` | ⚠️ powers off | On the N8 `reboot` switches the phone off instead of restarting (E6: reboots). Power on with the key |
+| `reboot` back to Symbian | soc reset `0x20033114` + startup mode in `0x20040400` bits 20-23 | 🧪 test | Symbian left the mode at 0, then the reset powers the N8 off. Setting it to `0xe` first (as `rebootdriver.ldd` does) brought Symbian back (devmem test). Now done by the restart handler with the 4th watchdog reg in the N8 dtbs |
 | Internal eMMC (`E:`, 16 GB) | `mmcblk1`, Samsung MAG4EM | ✅ reads | Stuck in 1-bit mode (`switch to bus width 4 failed`). One FAT32 filesystem, no partition table. **Never write to it** |
 | microSD | 2nd MMC controller, through the GAZOO level shifter | 🧪 test | No `mmcblk0` seen, probably no card inserted |
 | USB host / OTG | MUSB | 🔧 todo | Only the device side is set up |

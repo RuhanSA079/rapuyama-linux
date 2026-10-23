@@ -16,3 +16,11 @@
 &i2c0 {
 	status = "disabled";
 };
+
+/* 4th reg: the startup mode word. rebootdriver.ldd sets bits 20-23 before
+ * the soc reset; left at 0 the n8 powers off instead of booting symbian,
+ * 0xe (normal restart) brings it back (23.10.2026) */
+&{/soc/watchdog@20030700} {
+	reg = <0x20030700 0x40>, <0x200336c4 0x4>, <0x20033114 0x4>,
+	      <0x20040400 0x4>;
+};
