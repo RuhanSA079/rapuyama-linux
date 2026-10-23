@@ -1,10 +1,13 @@
 // dumps what the N8 WLAN driver gets at every WLAN start: the TI WL1271 NVS
 // (radio calibration + MAC, built by wlanhwinit.dll from the modem's
-// permanent memory and its own defaults), the WL1271 firmware and the MAC
-// address. read only: it asks wlanhwinit.dll through its exported API, the
+// permanent memory and its own defaults) and the MAC address. read only: it asks wlanhwinit.dll through its exported API, the
 // same calls wlanpdd/wlanldd make when WLAN is switched on.
-//   E:\wl_nvs.bin   init data (GetHwInitData)
-//   E:\wl_fw.bin    firmware  (GetHwInitData)
+//   E:\wl_init.bin    GetHwInitData's first block (N8: 4 zero bytes)
+//   E:\wl_nvs_ini.bin GetHwInitData's "firmware" block. On the N8 that is
+//                     no firmware but u32 len + the 468 byte TI NVS section
+//                     (MAC + calibration) + u32 len + a 208 byte INI section
+//                     (radio params, older TI layout). device specific:
+//                     don't publish it
 //   E:\wldump.log   lengths, first bytes, MAC
 // the calls run in a worker thread with its own cleanup stack and active
 // scheduler (the ISI client code under wlanhwinit wants one); the main
@@ -31,8 +34,8 @@ public:
 };
 
 _LIT(KLog, "E:\\wldump.log");
-_LIT(KNvs, "E:\\wl_nvs.bin");
-_LIT(KFw, "E:\\wl_fw.bin");
+_LIT(KNvs, "E:\\wl_init.bin");
+_LIT(KFw, "E:\\wl_nvs_ini.bin");
 
 static RFs gFs;
 
@@ -76,9 +79,9 @@ static void DumpL(){
 	const TUint8* nvs=NULL; const TUint8* fw=NULL;
 	TUint nvsLen=0, fwLen=0;
 	hw->GetHwInitData(&nvs, nvsLen, &fw, fwLen);
-	Head(_L8("nvs"), nvs, nvsLen);
-	Head(_L8("fw"), fw, fwLen);
-	b.Format(_L8("save nvs=%d fw=%d\n"), Save(KNvs, nvs, nvsLen), Save(KFw, fw, fwLen));
+	Head(_L8("init"), nvs, nvsLen);
+	Head(_L8("nvs+ini"), fw, fwLen);
+	b.Format(_L8("save init=%d nvs+ini=%d\n"), Save(KNvs, nvs, nvsLen), Save(KFw, fw, fwLen));
 	L(b);
 	// the object stays alive until the process ends: its destructor isn't
 	// needed and its class layout isn't known here
@@ -118,7 +121,7 @@ GLDEF_C TInt E32Main(){
 	// the worker logs and saves through the same session: without this its
 	// first file call is a bad handle (v2: KERN-EXEC 0)
 	gFs.ShareAuto();
-	L(_L8("wldump v6\n"));
+	L(_L8("wldump v7\n"));
 	RThread t;
 	TInt r=t.Create(_L("wldump-worker"), Worker, 0x8000, 0x1000, 0x100000, NULL);
 	TBuf8<120> b;

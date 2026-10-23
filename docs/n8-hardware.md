@@ -181,3 +181,11 @@ Later on 23.10.2026, with `n8-hw.dtb`:
 - The **power key** goes to the GAZOO PMIC (`PwrOnX`), not to a gpio: needs the PMIC's interrupt / status over CBUS, still to do. `n8-hw.dts` uses these: the
 touchscreen, accelerometer, magnetometer, light sensor and `gpio-keys-polled`; the chargers,
 the LED driver and the headphone amp stay off.
+
+## WLAN calibration (NVS) and MAC (24.10.2026)
+
+- The WLAN chip is a TI WL127x (WiLink 6) on SPI (`wlanpdd.pdd`: `TWDriverRadio`, `WspiBusDrv`, `ConvertBip2Nvs`). Wiring from the schematic: SPI_CLK genio74, SPI_CSX genio75, SPI_MOSI genio76, SPI_MISO genio77, WLAN_IRQ genio73, WLANENABLE on ball G9 (genio number not printed).
+- There is no calibration file. `wlanhwinit.dll` (class `CWlanHwInitPermParser`) gets the MAC and the per-device tuning from the modem's **permanent memory (PMM)** over ISI (`iscapi.dll`, `isimessage.dll`) at every WLAN start, and hands the WLAN driver one block through `CWlanHwInit::GetHwInitData()`.
+- `wldump.sis` (`linux/stage0/symbian-loader/wldump_app.cpp`) asks for it through that exported API, read only. It only works when the caller has C++ exception support (`wlanhwinit` uses TRAP inside): built without, `NewL` panicked E32USER-CBase 66.
+- On the N8 the "firmware" block is not firmware but: u32 length 468, the **468 byte TI NVS section** (it starts with the MAC register writes `01 6d 54 ..` / `01 71 54 ..`, then calibration tables), u32 length 208, a **208 byte INI section** (radio parameters in an older TI layout). The init data block is 4 zero bytes. MAC prefix `90:cf:15` (Nokia).
+- Linux `wl12xx` wants `wl1271-nvs.bin` = the 468 byte NVS section + a 444 byte INI section in the newer layout (912 bytes): the NVS part can be used as is, the INI part has to be converted or taken from TI's reference INI. Dumps are per device (MAC, factory calibration): keep them out of the repo.
