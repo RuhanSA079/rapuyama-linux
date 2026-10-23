@@ -1,7 +1,27 @@
-/* first boot on the nokia e7, same as the n8 one */
-/include/ "n8-usb.dts"
+/* first boot on the nokia e7 (same rapuyama soc as the e6 and n8, untested):
+ * usb shell + ram log only. no display, no i2c chips (the e6 keypad/touch
+ * addresses may be something else on this board), no swd (its addresses come
+ * from the e6 firmware), no rootfs on the card. was n8-usb.dts until the n8
+ * moved to one n8.dts; what the n8 needed on top (startup mode for reboot,
+ * loader B, chips) is in n8.dts and docs/n8-status.md */
+/include/ "e6-usb.dts"
 
 / {
 	compatible = "nokia,e7", "nokia,rapuyama";
 	model = "Nokia E7-00 (RapuYama)";
+
+	chosen {
+		bootargs = "earlycon=ramcon,0x1f000000 keep_bootcon console=ttyNULL panic=10 nohlt clk_ignore_unused pd_ignore_unused cma=0 e6.usbsh";
+	};
+};
+
+&i2c0 {
+	status = "disabled";
+};
+
+/* startup mode word as 4th reg, like n8.dts: reboot sets it to 0xe first,
+ * left at 0 the n8 powered off instead of booting symbian */
+&{/soc/watchdog@20030700} {
+	reg = <0x20030700 0x40>, <0x200336c4 0x4>, <0x20033114 0x4>,
+	      <0x20040400 0x4>;
 };

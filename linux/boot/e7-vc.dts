@@ -1,7 +1,25 @@
-/* e7 display test, same as the n8 one (the e7 panel is 360x640 too) */
-/include/ "n8-vc.dts"
+/* e7 display test: e7-usb.dts + the videocore driver with the e6 panel setup
+ * (640x480, standard dcs only). the log gets the vc boot + the panel id, the
+ * picture is probably wrong (the e7 panel is 360x640 like the n8 one). was
+ * n8-vc.dts until the n8 moved to one n8.dts */
+/include/ "e6-vc.dts"
 
 / {
 	compatible = "nokia,e7", "nokia,rapuyama";
 	model = "Nokia E7-00 (RapuYama)";
+
+	chosen {
+		bootargs = "earlycon=ramcon,0x1f000000 keep_bootcon console=tty0 panic=10 nohlt clk_ignore_unused pd_ignore_unused cma=0 e6.usbsh videocore.debug=1";
+	};
+};
+
+&i2c0 {
+	status = "disabled";
+};
+
+/* startup mode word as 4th reg, like n8.dts: reboot sets it to 0xe first,
+ * left at 0 the n8 powered off instead of booting symbian */
+&{/soc/watchdog@20030700} {
+	reg = <0x20030700 0x40>, <0x200336c4 0x4>, <0x20033114 0x4>,
+	      <0x20040400 0x4>;
 };
