@@ -107,16 +107,14 @@
 			syna,nosleep-mode = <1>;
 		};
 
-		/* raw x runs bottom -> top along the long side, raw y right -> left
-		 * (touchtest, phone upright, menu key at the bottom: with only
-		 * inverted-y + swapped the top right corner read (1637,3045), the
-		 * bottom right one (1665,0)). rmi4 flips both, then swaps. on the
-		 * phone with all three: (0,0) bottom left next to the menu key, max
-		 * top right, i.e. y runs bottom -> top. kept like that until the
-		 * display works, toggle touchscreen-inverted-x to get y top -> bottom */
+		/* raw x runs top -> bottom along the long side, raw y right -> left
+		 * (phone upright, menu key at the bottom). rmi4 flips, then
+		 * swaps: inverted-y + swapped-x-y = x left -> right 0..1756,
+		 * y top -> bottom 0..3155, matching the 360x640 panel. checked
+		 * with fbtouch: with inverted-x as well, every touch landed in
+		 * the box above / below the one touched (23.10.2026) */
 		rmi4-f11@11 {
 			reg = <0x11>;
-			touchscreen-inverted-x;
 			touchscreen-inverted-y;
 			touchscreen-swapped-x-y;
 		};
