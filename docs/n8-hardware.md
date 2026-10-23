@@ -171,6 +171,13 @@ is a FAT32 boot sector with no partition table, i.e. the whole device is `E:`.
 | | | | `0x60` | headphone amp N2000 (TPA6130A2) |
 | | | | `0x6a`, `0x6b` | the two bq2415x chargers N3301 / N3350 |
 
-The FM radio didn't answer (probably powered down). `n8-hw.dts` uses these: the
+The FM radio didn't answer (probably powered down).
+
+Later on 23.10.2026, with `n8-hw.dtb`:
+
+- **Keys work** (`keytest`): volume up/down, menu, camera focus + capture (two stage), lock slider (momentary), all on the schematic gpios, which are also the ones in the switch.dll config table (`0x801b53f4`: gpio, Symbian scancode x2, ...). The gpio "level" registers `0x200319f0 + 0x10 * k` never move; the pin state is the raw state in the irq block, `0x20033408 + 0x40 * k` (volume down: bank 2 bit 1, 1 -> 0 when held). The gpio driver reads that now.
+- **Sensors work** (`sensortest`): LIS302DL (~9.7 m/s2 on z lying flat), TSL2563 (~300 lx in the room, 8 lx covered), magnetometer probes as **AK8974** (follows rotation, ~1 G total, needs calibration).
+- **Touch is Synaptics, not maXTouch:** the info block at 0x4b reads all zeros as maXTouch; `i2cdump -y 0 0x4b` shows product id `TM1284_1` at `0x7e` and an RMI4 page description table: F34 (flash) at `0xe9`, F01 at `0xe3`, F08 (self test) at `0xdd`, F11 (2D) at `0xd7`. `n8-hw.dts` uses mainline `syna,rmi4-i2c` with a polling mode added to the rmi4 core (no irq on the ATTN gpio).
+- The **power key** goes to the GAZOO PMIC (`PwrOnX`), not to a gpio: needs the PMIC's interrupt / status over CBUS, still to do. `n8-hw.dts` uses these: the
 touchscreen, accelerometer, magnetometer, light sensor and `gpio-keys-polled`; the chargers,
 the LED driver and the headphone amp stay off.

@@ -61,12 +61,23 @@
 		reg = <0x1d>;
 	};
 
-	/* touch flex X2500. maXTouch at 0x4b (the e6 one sits at 0x4a), the
-	 * driver is polled and logs the info block, so a wrong guess just
-	 * fails the probe */
+	/* touch flex X2500: Synaptics ClearPad TM1284_1, RMI4 (i2cdump on the
+	 * phone: product id at 0x7e, PDT F34 / F01 / F08 / F11 at 0xe9..0xd7).
+	 * no interrupts: the ATTN gpio has no working irq, rmi4 polls */
 	touchscreen@4b {
-		compatible = "nokia,rapuyama-mxt";
+		compatible = "syna,rmi4-i2c";
 		reg = <0x4b>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		rmi4-f01@1 {
+			reg = <0x01>;
+			syna,nosleep-mode = <1>;
+		};
+
+		rmi4-f11@11 {
+			reg = <0x11>;
+		};
 	};
 };
 

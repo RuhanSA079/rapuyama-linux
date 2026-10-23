@@ -80,11 +80,12 @@ echo ">> kernel"
 cp "$ROOT/linux/kernel/e6.config" "$KOUT/.config"
 "$KSRC/scripts/config" --file "$KOUT/.config" --set-str INITRAMFS_SOURCE "$KOUT/initramfs.list"
 # n8 chips (docs/n8-hardware.md, used by n8-hw.dts): gpio keys, lis302dl,
-# ami305 / ak8974, tsl2563. the e6 dtbs don't name them, so they stay idle there
+# ak8974, tsl2563, the synaptics rmi4 touchscreen. the e6 dtbs don't name them, so they stay idle there
 "$KSRC/scripts/config" --file "$KOUT/.config" --enable KEYBOARD_GPIO_POLLED \
 	--enable IIO --enable IIO_BUFFER --enable IIO_TRIGGERED_BUFFER \
 	--enable IIO_ST_ACCEL_3AXIS --enable IIO_ST_ACCEL_I2C_3AXIS \
-	--enable AK8974 --enable SENSORS_TSL2563
+	--enable AK8974 --enable SENSORS_TSL2563 \
+	--enable RMI4_CORE --enable RMI4_I2C --enable RMI4_2D_SENSOR --enable RMI4_F11
 make -C "$KSRC" O="$KOUT" olddefconfig >/dev/null
 make -C "$KSRC" O="$KOUT" -j"$(nproc)" Image scripts_dtc
 
