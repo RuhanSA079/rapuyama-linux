@@ -94,3 +94,4 @@ for v in n8-usb n8-vc e7-usb e7-vc; do
 	dtc -I dts -O dtb -i linux/boot -o $v.dtb linux/boot/$v.dts
 done
 ```
+On Debian / Ubuntu, `tools/build-n8-kit.sh [n8|e7]` does all of the above for test 1 (USB shell kernel, `*-usb.dtb`, both SIS files) and puts the kit with `SHA256SUMS` in `out/<phone>-test1/`. N8 hardware read off the schematics (keys, I2C buses, touch, display, UART pads) is in [`n8-hardware.md`](n8-hardware.md).
