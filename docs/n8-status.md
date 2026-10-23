@@ -31,7 +31,7 @@ State on 23.10.2026, Symbian Anna 024.001, `n8boot` loader, E6 kernel with the N
 | --- | --- | --- | --- |
 | Side keys (volume, menu, camera half/full, lock slider) | gpio 2, 65, 1, 38, 36, 79 | ✅ works | `gpio-keys-polled`. Needed the gpio driver fix: levels come from the irq block raw state `0x20033408 + 0x40 * k` |
 | Power key (top) | `PwrOnX` on the GAZOO PMIC | 🔬 research | PMIC interrupt + status over CBUS. Linux's `retu-pwrbutton` is the same idea on Nokia's older PMIC |
-| Touchscreen | Synaptics ClearPad TM1284, RMI4 on i2c-0 `0x4b` | ✅ works | Mainline `rmi4` (F01 + F11) with a new polling mode (15 ms), the ATTN gpio has no irq. 2 fingers, x 0..3155 along the long side, y 0..1756: swapped and y mirrored against the 360x640 portrait panel, fixed in `n8-hw.dts` (`touchscreen-inverted-y` + `touchscreen-swapped-x-y`) |
+| Touchscreen | Synaptics ClearPad TM1284, RMI4 on i2c-0 `0x4b` | ✅ works | Mainline `rmi4` (F01 + F11) with a new polling mode (15 ms), the ATTN gpio has no irq. 2 fingers, x 0..3155 along the long side, y 0..1756: swapped and both axes mirrored against the 360x640 portrait panel, fixed in `n8-hw.dts` (`touchscreen-inverted-x` + `-inverted-y` + `-swapped-x-y`) |
 | Accelerometer | ST LIS302DL, i2c-0 `0x1d` | ✅ works | `st_accel`, ~9.7 m/s2 lying flat |
 | Magnetometer | AK8974, i2c-0 `0x0f` | ✅ works | Reads ~1 G total: needs calibration for a compass |
 | Ambient light | TSL2563, i2c-1 `0x29` | ✅ works | |
