@@ -530,6 +530,11 @@ TInt DRunBlobChan::Request(TInt aFunction, TAny* a1, TAny* a2){
 		static const TUint32 KSizes[]={0xa000000u, 0x9000000u, 0x8000000u, 0x7000000u, 0x6000000u, 0x5000000u, 0x4000000u, 0x3000000u, 0x2000000u};
 		const TUint32 KLo=0x11600000u, KHi=0x1a000000u;
 		TInt r=KErrNoMemory;
+		// biggest block symbian handed out (any address), reported on failure:
+		// phys | size in mb (blocks are 2 mb aligned, the low bits are free).
+		// other phones (n8) have a different layout, this says why it failed
+		TPhysAddr bestp=0;
+		TUint32 bestsz=0;
 		// symbian's free ram is fragmented by movable pages and the paging cache,
 		// so between rounds let the kernel compact it (moves movable pages,
 		// drops discardable ones)
@@ -544,13 +549,18 @@ TInt DRunBlobChan::Request(TInt aFunction, TAny* a1, TAny* a2){
 			for(TUint k=0; r!=KErrNone && k<sizeof(KSizes)/sizeof(KSizes[0]); ++k){
 				TPhysAddr p=0;
 				if(Epoc::AllocPhysicalRam((TInt)KSizes[k], p, 21)!=KErrNone){continue;}
+				if(KSizes[k]>bestsz){bestsz=KSizes[k]; bestp=p;}
 				if(p>=KLo && p<=KHi && p+KSizes[k]<=0x1f000000u){iBootPhys=p; size=KSizes[k]; r=KErrNone;}
 				else if(nheld<4){held[nheld]=p; heldsz[nheld++]=KSizes[k];}
 				else{Epoc::FreePhysicalRam(p, (TInt)KSizes[k]);}
 			}
 			for(TInt i=0; i<nheld; ++i){Epoc::FreePhysicalRam(held[i], (TInt)heldsz[i]);}
 		}
-		if(r!=KErrNone){return KErrNoMemory;}
+		if(r!=KErrNone){
+			TUint32 out=(TUint32)bestp|(bestsz>>20);
+			Kern::ThreadRawWrite(&Kern::CurrentThread(), a2, &out, 4);
+			return KErrNoMemory;
+		}
 		// all of it stays allocated (no symbian buffers in linux's ram), only
 		// the first 32 mb (Image + dtb) get mapped
 		TUint32 alloc=size;

@@ -193,11 +193,17 @@ GLDEF_C TInt E32Main(){
 
 	TUint32 phys=0;
 	for(;;){
+		phys=0;
 		r=dev.AllocBoot(KChunkSz, phys);
 		Lf(_L8("AllocBoot=%d phys=%08x\n"), r, phys);
 		if(r==KErrNone){break;}
 		TBuf<48> m;
-		m.Format(_L("no free ram block (%d)"), r);
+		// on -4 phys = biggest block symbian gave | its size in mb (0 = none)
+		if(r==KErrNoMemory && phys){
+			m.Format(_L("no ram: best %dmb@%08x"), phys&0xff, phys&~0xfffu);
+		}else{
+			m.Format(_L("no free ram block (%d)"), r);
+		}
 		if(Ask(m, _L("close apps and retry?"), _L("Retry"), _L("Cancel"))!=0){
 			User::Free(buf); dev.Close(); gLog.Close(); gFs.Close();
 			return r;
