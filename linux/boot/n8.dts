@@ -8,10 +8,10 @@
  * - side keys (gpio-keys-polled), Synaptics TM1284 touch (rmi4, polled),
  *   LIS302DL, AK8974, TSL2563
  * - VideoCore: loader B (loader A is refused on the N8), bring-up 30 s after
- *   the boot (started early it powered the phone off). It boots and takes
- *   frames, but the panel stays dark: the N8 one (360x640 DSI, interface 6)
- *   needs the N8 panel path in the driver (videocore.panel=n8), not
- *   verified yet, so this stays on the E6 interface 4 until it is
+ *   the boot (started early it powered the phone off)
+ * - display: the 360x640 DSI panel (id fe 94 80) on interface 6 with the N8
+ *   panel path (videocore.panel=n8, kernel patch 0007): works, ~4.8 fps
+ *   with PIO frame pushes
  *
  * Left out on purpose: the E6 keypad (TC3589x) and maXTouch nodes (not on the
  * N8), the bq2415x chargers (not tested on the N8, boot with a charged
@@ -24,7 +24,7 @@
 	model = "Nokia N8-00 (RapuYama)";
 
 	chosen {
-		bootargs = "earlycon=ramcon,0x1f000000 keep_bootcon console=tty0 panic=10 nohlt clk_ignore_unused pd_ignore_unused cma=0 e6.usbsh videocore.debug=1 videocore.loader_b=1 videocore.start_delay=30";
+		bootargs = "earlycon=ramcon,0x1f000000 keep_bootcon console=tty0 panic=10 nohlt clk_ignore_unused pd_ignore_unused cma=0 e6.usbsh videocore.debug=1 videocore.loader_b=1 videocore.start_delay=30 videocore.panel=n8";
 	};
 	/* all keys go straight to gpios and switch to gnd (schematic p4).
 	 * polled, the gpio irq polarity is not known */
