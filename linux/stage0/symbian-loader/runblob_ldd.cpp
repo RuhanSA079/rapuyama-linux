@@ -550,7 +550,10 @@ TInt DRunBlobChan::Request(TInt aFunction, TAny* a1, TAny* a2){
 				TPhysAddr p=0;
 				if(Epoc::AllocPhysicalRam((TInt)KSizes[k], p, 21)!=KErrNone){continue;}
 				if(KSizes[k]>bestsz){bestsz=KSizes[k]; bestp=p;}
-				if(p>=KLo && p<=KHi && p+KSizes[k]<=0x1f000000u){iBootPhys=p; size=KSizes[k]; r=KErrNone;}
+				// only the start matters: linux's ram comes from the dt (up to
+				// 0x20000000) either way. the n8 hands out 96 mb at 0x19a00000,
+				// past the ramcon buffer at 0x1f000000: fine, that ram is ours then
+				if(p>=KLo && p<=KHi){iBootPhys=p; size=KSizes[k]; r=KErrNone;}
 				else if(nheld<4){held[nheld]=p; heldsz[nheld++]=KSizes[k];}
 				else{Epoc::FreePhysicalRam(p, (TInt)KSizes[k]);}
 			}

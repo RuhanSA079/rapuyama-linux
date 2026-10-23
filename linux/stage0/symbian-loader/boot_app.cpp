@@ -179,7 +179,7 @@ GLDEF_C TInt E32Main(){
 	if(gFs.Connect()!=KErrNone){return KErrGeneral;}
 	if(gLog.Replace(gFs, KLog, EFileWrite)!=KErrNone){gFs.Close(); return KErrGeneral;}
 	L(_L8("boot: started\n"));
-	L(_L8("boot: alloc v2\n"));
+	L(_L8("boot: alloc v3\n"));
 	{
 		TMemoryInfoV1Buf mi;
 		if(UserHal::MemoryInfo(mi)==KErrNone){
