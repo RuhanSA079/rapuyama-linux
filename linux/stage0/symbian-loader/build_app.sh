@@ -13,6 +13,10 @@
 #   ./build_app.sh all                                  -> both
 #   RB_DEFS=-DRB_IMAGE_BOOT ./build_app.sh e6bfix boot_app.cpp 0xe1000024
 #     -> out/e6bfix.sis: boots E:\Image in place (no decompressor)
+#   APP_LIBS="$ROOT/driver/import/wlanhwinit.dso" ./build_app.sh wldump wldump_app.cpp 0xe1000054
+#     -> out/wldump.sis: extra import libraries for the app via APP_LIBS;
+#     APP_CAPS sets the exe's capabilities (default all): a process can only
+#     load DLLs with at least its capabilities, ROM DLLs are often all-tcb
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"
@@ -86,11 +90,11 @@ $LD "${LDFLAGS[@]}" --entry _E32Dll -u _E32Dll \
     --definput="$DRV/ptdump.def" --dlldata --compressionmethod=none --capability=all
 $LD "${LDFLAGS[@]}" --entry _E32Startup -u _E32Startup \
     "$OUT/app.o" "$OUT/uc_exe.o" "$OUT/uc_exe_cia.o" \
-    "$DRV/import/EUSER.dso" "$DRV/import/EFSRV.dso" "$DRV/import/iscapi.dso" "$LIBGCC" -o "$OUT/app.elf"
+    "$DRV/import/EUSER.dso" "$DRV/import/EFSRV.dso" "$DRV/import/iscapi.dso" ${APP_LIBS:-} "$LIBGCC" -o "$OUT/app.elf"
 "$E2E" --elfinput="$OUT/app.elf" --output="$OUT/${NAME}_0x$UHEX.exe" \
     --targettype=EXE --uid1=0x1000007a --uid2=0x100039ce --uid3="$UID3" \
     --linkas="${NAME}_0x$UHEX{000a0000}[$UHEX].exe" --libpath="$DRV/import" \
-    --capability=all --compressionmethod=none
+    --capability="${APP_CAPS:-all}" --compressionmethod=none
 
 echo ">> $NAME: sis"
 W="$OUT/sis"
