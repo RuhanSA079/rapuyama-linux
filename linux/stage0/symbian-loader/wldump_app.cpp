@@ -84,11 +84,29 @@ static void DumpL(){
 	// needed and its class layout isn't known here
 }
 
+// User::Leave() calls the thread's trap handler with the reason before it
+// throws (us_trp.cpp), so a handler in front of the cleanup stack's one can
+// log the leave code without any TRAP / exception support here
+class TLogTrap : public TTrapHandler {
+public:
+	TTrapHandler* iOld;
+	void Trap(){ if(iOld){iOld->Trap();} }
+	void UnTrap(){ if(iOld){iOld->UnTrap();} }
+	void Leave(TInt aValue){
+		TBuf8<40> b;
+		b.Format(_L8("leave %d\n"), aValue);
+		L(b);
+		if(iOld){iOld->Leave(aValue);}
+	}
+};
+
 static TInt Worker(TAny*){
 	CTrapCleanup* tc=CTrapCleanup::New();
 	CActiveScheduler* as=new CActiveScheduler;
 	if(!tc || !as){return KErrNoMemory;}
 	CActiveScheduler::Install(as);
+	TLogTrap lt;
+	lt.iOld=User::SetTrapHandler(&lt);
 	L(_L8("worker: cleanup stack + active scheduler ready\n"));
 	// no TRAP (no exception runtime here): a leave ends this thread, and
 	// the main thread logs how
@@ -102,7 +120,7 @@ GLDEF_C TInt E32Main(){
 	// the worker logs and saves through the same session: without this its
 	// first file call is a bad handle (v2: KERN-EXEC 0)
 	gFs.ShareAuto();
-	L(_L8("wldump v3\n"));
+	L(_L8("wldump v4\n"));
 	RThread t;
 	TInt r=t.Create(_L("wldump-worker"), Worker, 0x8000, 0x1000, 0x100000, NULL);
 	TBuf8<120> b;
