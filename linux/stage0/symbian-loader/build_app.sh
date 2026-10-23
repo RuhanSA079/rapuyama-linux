@@ -27,6 +27,8 @@ NAME="$1"; SRC="$2"; UID3="$3"
 [ ${#NAME} -eq 6 ] || { echo "name must be 6 chars (template patching)"; exit 1; }
 LUID=$(printf '0x%08x' $((UID3 + 1)))
 UHEX=$(printf '%08x' $((UID3)))
+# LDD=name: own ldd file name (default: same as the app), see runblob.h
+LDDN="${LDD:-$NAME}"
 LHEX=$(printf '%08x' $((LUID)))
 
 KH="$ROOT/symbian/oss.FCL.sf.os.kernelhwsrv"
@@ -59,7 +61,7 @@ COMMON=(
   -nostdinc -fno-exceptions -fno-rtti -fshort-wchar -fno-unit-at-a-time -O2
   -D__SYMBIAN32__ -D__GCCE__ -D__EABI__ -D__MARM__ -D__MARM_ARMV5__ -D__MARM_ARMV6__
   -D__EPOC32__ -D__GCC32__ -D__SUPPORT_CPP_EXCEPTIONS__ -D__GCCV3__ -D__PRODUCT_INCLUDE__='<variant_dummy.h>'
-  -DRB_NAME="\"$NAME\"" ${RB_DEFS:-}
+  -DRB_NAME="\"$NAME\"" -DRB_LDD="\"$LDDN\"" ${RB_DEFS:-}
   -include gcce.h -include "$DRV/gcce_post.h"
   "${INC[@]}"
 )
@@ -78,9 +80,9 @@ echo ">> $NAME: link"
 $LD "${LDFLAGS[@]}" --entry _E32Dll -u _E32Dll \
     "$OUT/ldd.o" "$OUT/d_entry.o" "$OUT/d_entry_cia.o" \
     "$DRV/import/EKERN.dso" "$LIBGCC" -o "$OUT/ldd.elf"
-"$E2E" --elfinput="$OUT/ldd.elf" --output="$OUT/$NAME.ldd" \
+"$E2E" --elfinput="$OUT/ldd.elf" --output="$OUT/$LDDN.ldd" \
     --targettype=LDD --uid1=0x10000079 --uid2=0x100000af --uid3="$LUID" \
-    --linkas="$NAME{000a0000}[$LHEX].ldd" --libpath="$DRV/import" \
+    --linkas="$LDDN{000a0000}[$LHEX].ldd" --libpath="$DRV/import" \
     --definput="$DRV/ptdump.def" --dlldata --compressionmethod=none --capability=all
 $LD "${LDFLAGS[@]}" --entry _E32Startup -u _E32Startup \
     "$OUT/app.o" "$OUT/uc_exe.o" "$OUT/uc_exe_cia.o" \
@@ -95,7 +97,7 @@ W="$OUT/sis"
 rm -rf "$W"
 mkdir -p "$W/approot/sys/bin" "$W/approot/resource/apps" \
 	"$W/approot/private/10003a3f/import/apps"
-cp "$OUT/${NAME}_0x$UHEX.exe" "$OUT/$NAME.ldd" "$W/approot/sys/bin/"
+cp "$OUT/${NAME}_0x$UHEX.exe" "$OUT/$LDDN.ldd" "$W/approot/sys/bin/"
 # the ptdump reg/loc resources with the names + uid swapped. same string
 # lengths, so only the bytes change; the uid checksum in the header is redone
 python3 - "$DRV/sis/approot" "$W/approot" "$NAME" "$UID3" <<'EOF'

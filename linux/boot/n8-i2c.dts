@@ -1,0 +1,18 @@
+/* n8-usb.dts + both i2c controllers on, with no chips on them: the e6 keypad,
+ * touch and charger are not what the n8 has (docs/n8-hardware.md). only for
+ * i2cdetect from the usb shell, to find the n8's chips and which bus is which */
+/include/ "n8-usb.dts"
+
+&i2c0 {
+	status = "okay";
+	/delete-node/ keypad@44;
+	/delete-node/ touchscreen@4a;
+};
+
+&i2c3 {
+	status = "okay";
+};
+
+&charger {
+	status = "disabled";
+};
