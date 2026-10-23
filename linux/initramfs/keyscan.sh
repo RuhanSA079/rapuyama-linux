@@ -6,7 +6,8 @@
 #   keyscan raw        just print every event, ctrl-c to stop
 #
 # two sources, polled every ~20 ms:
-# - gpio levels, banks 0-4 (0x200319f0 + 0x10 * k, egpio): side keys wired
+# - gpio levels, banks 0-4 (raw state 0x20033408 + 0x40 * k, the egpio irq
+#   block: the 0x200319f0 "level" regs never move, n8 23.10.2026): side keys wired
 #   straight to pins. event "gpioN 0/1", N = bank * 32 + bit like in the dt
 # - the keypad chip on i2c 0x44 (keypad_exp.dll), only while the tc3589x
 #   driver doesn't own it (it does now, the matrix is mapped in e6.dts).
@@ -86,7 +87,7 @@ kp_poll() {
 gpio_read() {
 	local k
 	for k in 0 1 2 3 4; do
-		eval "n$k=\$(devmem $((0x200319f0 + 0x10 * k)) 32)"
+		eval "n$k=\$(devmem $((0x20033408 + 0x40 * k)) 32)"
 	done
 }
 
