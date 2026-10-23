@@ -36,6 +36,12 @@ if [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "$want $(tree)" ]; then
 	echo "kernel patches: all in already"
 	exit 0
 fi
+# the tree is exactly what an older patch set produced: patches were added or
+# changed since, start over from the upstream commit
+if [ -f "$STAMP" ] && [ "$(cut -d' ' -f2 "$STAMP")" = "$(tree)" ]; then
+	echo "kernel patches changed, re-applying"
+	git -C "$KSRC" checkout -- .
+fi
 if ! git -C "$KSRC" diff --quiet; then
 	echo "kernel tree has changes that aren't this patch set (edited by hand,"
 	echo "or older patches): commit them as patches, or $0 reset"
