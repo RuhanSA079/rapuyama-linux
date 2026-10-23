@@ -1,0 +1,75 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Ruhan van der Berg <35257374+RuhanSA079@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 19:34:47 +0200
+Subject: [PATCH 1/6] gpio: rapuyama: read input levels from the irq block raw
+ state
+
+The 0xf0 + 0x10 * k "pin level" registers never change on a key press.
+On the N8 (RM-596), holding volume down (gpio 65) changed no word of the
+0x20031900 block, while bank 2 +0x08 (raw state) in the irq block at
+0x20033400 went from 1 to 0 in bit 1. The E6 flight recorder saw the same
+dead level registers. Pins in the egpio irq table now read the raw state;
+the others keep the old register.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpio/gpio-rapuyama.c | 25 ++++++++++++++++++++++++-
+ 1 file changed, 24 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/gpio/gpio-rapuyama.c b/drivers/gpio/gpio-rapuyama.c
+index 75e2bcdfe..bb4bdb5ab 100644
+--- a/drivers/gpio/gpio-rapuyama.c
++++ b/drivers/gpio/gpio-rapuyama.c
+@@ -14,7 +14,8 @@
+  *                      0x94 + 0x10 * k   write: bits -> high
+  *                      0x98 + 0x10 * k   write: bits -> low
+  *   out bank 6:        0x1b0 / 0x1b4 / 0x1b8
+- *   in bank k (0-4):   0xf0 + 0x10 * k   read: pin level
++ *   in bank k (0-4):   0xf0 + 0x10 * k   read: "pin level", doesn't follow
++ *                                        the pins (see rapuyama_gpio_get)
+  *                      0xf4 + 0x10 * k   write: bits -> input
+  *                      0xf8 + 0x10 * k   write: bits -> output
+  *
+@@ -57,6 +58,7 @@
+ #define RY_IRQ_BANK_EN	0x04
+ #define RY_IRQ_EN	0x10
+ #define RY_IRQ_DIS	0x14
++#define RY_IRQ_RAW	0x08
+ #define RY_IRQ_ENABLED	0x18
+ #define RY_IRQ_ACK	0x20
+ #define RY_IRQ_EDGE	0x28
+@@ -106,6 +108,17 @@ static int rapuyama_gpio_get_direction(struct gpio_chip *gc, unsigned int off)
+ 						GPIO_LINE_DIRECTION_IN;
+ }
+ 
++/* the pin has a line in the egpio irq table, so a bit in the irq block */
++static bool ry_irq_capable(unsigned int off)
++{
++	unsigned int i;
++
++	for (i = 0; i < ARRAY_SIZE(ry_irq_ranges); i++)
++		if (off >= ry_irq_ranges[i].first && off <= ry_irq_ranges[i].last)
++			return true;
++	return false;
++}
++
+ static int rapuyama_gpio_get(struct gpio_chip *gc, unsigned int off)
+ {
+ 	struct rapuyama_gpio *ry = gpiochip_get_data(gc);
+@@ -113,6 +126,16 @@ static int rapuyama_gpio_get(struct gpio_chip *gc, unsigned int off)
+ 
+ 	if (k >= RY_GPIO_IN_BANKS || (ry->dir_out[k] & ry_bit(off)))
+ 		return !!(readl(ry->base + RY_OUT(k)) & ry_bit(off));
++	/*
++	 * 0xf0 + 0x10 * k never moves on a key press (N8 23.10.2026: volume
++	 * down = gpio 65 held, every word of the 0x20031900 block stayed the
++	 * same; the E6 flight recorder saw the same). the raw state in the irq
++	 * block follows the pin: bank 2 +0x08 bit 1 went 1 -> 0. pins outside
++	 * the irq table keep the old register
++	 */
++	if (!IS_ERR_OR_NULL(ry->irq_base) && ry_irq_capable(off))
++		return !!(readl(ry->irq_base + RY_IRQ_BANK(k) + RY_IRQ_RAW) &
++			  ry_bit(off));
+ 	return !!(readl(ry->base + RY_IN(k)) & ry_bit(off));
+ }
+ 

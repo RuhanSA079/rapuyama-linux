@@ -1,0 +1,671 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Ruhan van der Berg <35257374+RuhanSA079@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 22:15:33 +0200
+Subject: [PATCH] soc: rapuyama: videocore: N8 panel (videocore.panel=n8)
+
+The N8's 360x640 panel hangs on DSPC interface 6 (DSI) and Nokia's
+d_display brings it up differently from the E6 one. Captured by running
+the N8 ROM's display drivers in the emulator (work/vcemu-n8).
+
+- resolution at runtime (vc->w, vc->h) for the fb, push buffer, KMS
+  mode, bufman write, element add and the test pattern; the bufman pitch
+  is the width rounded up to 16 pixels like Symbian's (N8 0x5c0, E6
+  unchanged)
+- videocore.panel=e6|n8, dspc_id 0 = the panel's (E6 4, N8 6)
+- N8 config (cmd 3) layout 2: 360, 640, 1, 0, 2, 0xffff, 142858, 4000,
+  142858
+- DCS commands up to 4 bytes
+- N8 power-up: power 0x81 before the status reads; cold power 0x41/0x40,
+  nop + id reads, config, backlight [+ Samsung block] + sleep out,
+  config, mode + 2a/2b/2c window; warm the same without power cycle,
+  sleep out and window. op 8 reads 05 around its batch. every refresh
+  sends 35/34/36 and the window before the bufman write
+- the Samsung block (and 51 ff, 53 20) goes out only for panel id
+  fe 80 xx like Nokia's, videocore.samsung=0/1 forces it
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/soc/rapuyama/videocore.c | 356 ++++++++++++++++++++++++-------
+ 1 file changed, 284 insertions(+), 72 deletions(-)
+
+diff --git a/drivers/soc/rapuyama/videocore.c b/drivers/soc/rapuyama/videocore.c
+index 42b1ecdf4..3de49c7b8 100644
+--- a/drivers/soc/rapuyama/videocore.c
++++ b/drivers/soc/rapuyama/videocore.c
+@@ -2,8 +2,9 @@
+ /*
+  * Boots the VideoCore over the ViSSI host bus, runs VCHI on top of it,
+  * brings the LCD panel up through the display command service (DSPC) and
+- * exposes a 640x480 XRGB8888 KMS device (/dev/dri/card0, plus /dev/fb0
+- * through the drm fbdev emulation). Frames are pushed into a dispman
++ * exposes an XRGB8888 KMS device (/dev/dri/card0, plus /dev/fb0 through the
++ * drm fbdev emulation): 640x480 on the E6, 360x640 on the N8
++ * (videocore.panel=n8). Frames are pushed into a dispman
+  * resource with vc_bufmanx (service BFMX) and VCHI bulk transfers.
+  * Everything here follows the Symbian drivers in the E6 ROM (vcdriver.dll,
+  * vchi.dll, dispcommanddrv.dll, display_chipset, vcdispman.dll,
+@@ -136,11 +137,11 @@
+ #define G_W	0x80	/* halfwords per line, Symbian always uses 0x80 */
+ #define G_LINE	(G_W * 2)
+ 
+-#define VC_W 640
+-#define VC_H 480
++/* the widest panel (E6), sizes vc->row */
++#define VC_MAX_PITCH (640 * 4)
+ /* 4 bytes a pixel (XRGB8888) or 2 with videocore.rgb565=1 */
+ #define VC_PITCH (vc->pitch)
+-#define VC_FB_SIZE (VC_PITCH * VC_H)
++#define VC_FB_SIZE (VC_PITCH * vc->h)
+ 
+ static inline u16 vc_565(u32 p)
+ {
+@@ -213,12 +214,22 @@ static bool partial;
+ module_param(partial, bool, 0644);
+ MODULE_PARM_DESC(partial, "push only the changed rows, BROKEN on the phone (the VC ignores the write rects)");
+ 
+-/* display chipset interface: 4 = the E6's RGB/video panel. the chipset table
+- * (0x8034eaa4 in the E6 ROM) has one more, 6, likely the DSI one the N8's
+- * 360x640 panel hangs on */
+-static unsigned int dspc_id = 4;
++/* display chipset interface: 4 = the E6's RGB/video panel, 6 = the N8's DSI
++ * one (its d_display maps display path 11 to 6, work/vcemu-n8/MAPPING.md).
++ * 0 = the panel's */
++static unsigned int dspc_id;
+ module_param(dspc_id, uint, 0444);
+-MODULE_PARM_DESC(dspc_id, "display chipset interface id (E6 = 4, try 6 for a DSI panel)");
++MODULE_PARM_DESC(dspc_id, "display chipset interface id (0 = the panel's: E6 4, N8 6)");
++
++static char *panel = "e6";
++module_param(panel, charp, 0444);
++MODULE_PARM_DESC(panel, "panel: e6 (640x480, default) or n8 (360x640 DSI)");
++
++/* N8: Nokia sends extra Samsung commands only for panel id fe 80 80 (and
++ * fe 80 00), the real N8 answer is not known yet */
++static int samsung = -1;
++module_param(samsung, int, 0444);
++MODULE_PARM_DESC(samsung, "N8 Samsung init block: -1 = when the panel id is fe 80 xx (default), 0 = never, 1 = always");
+ 
+ /* wait this long before touching the VC: a boot that hangs in the bring-up
+  * then still gets the usb shell up first, to watch it with dmesg -w */
+@@ -292,17 +303,20 @@ struct vc {
+ 	bool dspc_rx_seen;
+ 
+ 	/* display */
++	bool n8;	/* videocore.panel=n8 */
++	bool samsung;	/* N8: send the Samsung block (panel id fe 80 xx) */
++	u32 w, h;
+ 	u32 display, resource, element;
+ 	bool ready;
+ 	bool first_refresh;
+ 	bool te_on;
+ 	unsigned int frames;
+ 
+-	u32 pitch;	/* VC_W * 2 or 4 */
++	u32 pitch;	/* w rounded up to 16 pixels, * 2 or 4 */
+ 	bool push_ready;	/* push already holds the frame (test pattern) */
+ 	bool push_low;		/* push is the low buffer from lowmem.c */
+ 	unsigned int partial_log;
+-	u8 row[VC_W * 4];	/* one converted row for the diff */
++	u8 row[VC_MAX_PITCH];	/* one converted row for the diff */
+ 
+ 	/* drm: the plane is copied into fb, the thread pushes fb */
+ 	struct drm_device drm;
+@@ -1239,15 +1253,26 @@ static int dspc_simple(struct vc *vc, u32 cmd, u32 arg)
+ /*
+  * panel config for the E6 panel (id 01 8b 79, FUN_80349e58 case 0x79 on
+  * 0x72) as FUN_80359c44 + FUN_80340d50 build it for interface 4: 640x480,
+- * format 2, porches 10/20/2 and 3/3/3, 20 MHz pixel clock, 2 MHz cmd clock
++ * format 2, porches 10/20/2 and 3/3/3, 20 MHz pixel clock, 2 MHz cmd clock.
++ * N8 (module 0x80, interface 6): layout 2 of dispcommanddrv ord5, u16 w, h,
++ * format 1, 0, 2, 0xffff and u32 142858, 4000, 142858 (ps), as captured
+  */
+ static int dspc_config(struct vc *vc)
+ {
+-	static const u16 h16[12] = { VC_W, VC_H, 2, 0, 1, 0xffff,
+-				     10, 20, 2, 3, 3, 3 };
++	const u16 h16[12] = { vc->w, vc->h, 2, 0, 1, 0xffff,
++			      10, 20, 2, 3, 3, 3 };
++	const u16 n8_16[6] = { vc->w, vc->h, 1, 0, 2, 0xffff };
+ 	u8 pl[32];
+ 	unsigned int i;
+ 
++	if (vc->n8) {
++		for (i = 0; i < ARRAY_SIZE(n8_16); i++)
++			put_unaligned_le16(n8_16[i], pl + 2 * i);
++		put_unaligned_le32(142858, pl + 12);
++		put_unaligned_le32(4000, pl + 16);
++		put_unaligned_le32(142858, pl + 20);
++		return dspc_send(vc, 0, dspc_id, 3, 0, pl, 24);
++	}
+ 	for (i = 0; i < ARRAY_SIZE(h16); i++)
+ 		put_unaligned_le16(h16[i], pl + 2 * i);
+ 	put_unaligned_le32(20000000, pl + 24);
+@@ -1258,7 +1283,7 @@ static int dspc_config(struct vc *vc)
+ struct dcs {
+ 	u8 cmd;
+ 	u8 len;
+-	u8 data[3];
++	u8 data[4];
+ };
+ 
+ /* batch (cmd 0x40): u32 count, per command {1, 0, dcs, padded len, len, data} */
+@@ -1342,8 +1367,9 @@ static int vc_panel_status(struct vc *vc)
+ 	return pm;
+ }
+ 
+-/* panel id reads (dc db da), as Symbian does before powering the panel */
+-static void vc_panel_id(struct vc *vc)
++/* panel id reads (dc db da), as Symbian does before powering the panel;
++ * returns da << 16 | db << 8 | dc */
++static u32 vc_panel_id(struct vc *vc)
+ {
+ 	u8 id[3] = { };
+ 	int i;
+@@ -1351,6 +1377,7 @@ static void vc_panel_id(struct vc *vc)
+ 	for (i = 0; i < 3; i++)
+ 		dspc_read(vc, 0xdc - i, &id[i], 1);
+ 	dev_info(vc->dev, "panel id %02x %02x %02x\n", id[2], id[1], id[0]);
++	return id[2] << 16 | id[1] << 8 | id[0];
+ }
+ 
+ /*
+@@ -1390,6 +1417,8 @@ static const struct dcs panel_mode[] = {
+ 	{ 0x3a, 1, { 0x70 } },
+ };
+ 
++static int vc_n8_op8(struct vc *vc);
++
+ /* op 8 */
+ static int vc_panel_op8(struct vc *vc)
+ {
+@@ -1405,9 +1434,165 @@ static int vc_panel_op8(struct vc *vc)
+ 		{ 0x55, 1, { 0x00 } },
+ 	};
+ 
++	if (vc->n8)
++		return vc_n8_op8(vc);
+ 	return dspc_batch(vc, on, ARRAY_SIZE(on));
+ }
+ 
++/*
++ * N8 (d_display FUN_8031de34 poweron, FUN_803201e8 op 8, FUN_8031fe74
++ * refresh), captured in work/vcemu-n8/{cold,warm}.log: the same DSPC wire
++ * format on interface 6, a DSI panel that is written with 2a/2b/2c windows
++ */
++static const struct dcs n8_samsung_block[] = {
++	{ 0xf1, 2, { 0x5a, 0x5a } },
++	{ 0xd5, 1, { 0x08 } },
++	{ 0xf1, 2, { 0xa5, 0xa5 } },
++	{ 0xfc, 2, { 0x5a, 0x5a } },
++	{ 0xfd, 1, { 0x10 } },
++};
++
++/* column / page address of the whole screen and write memory start */
++static unsigned int vc_n8_window(struct vc *vc, struct dcs *c)
++{
++	c[0] = (struct dcs){ 0x2b, 4, { 0, 0, (vc->h - 1) >> 8, (vc->h - 1) & 0xff } };
++	c[1] = (struct dcs){ 0x2a, 4, { 0, 0, (vc->w - 1) >> 8, (vc->w - 1) & 0xff } };
++	c[2] = (struct dcs){ 0x2c, 0 };
++	return 3;
++}
++
++/* every refresh, before the bufman write */
++static int vc_n8_frame(struct vc *vc)
++{
++	struct dcs c[6] = {
++		{ 0x35, 1, { 0x00 } },
++		{ 0x34, 0 },
++		{ 0x36, 1, { 0xd4 } },
++	};
++
++	return dspc_batch(vc, c, 3 + vc_n8_window(vc, c + 3));
++}
++
++/* id dc db da -> Samsung block or not (Nokia: id fe 80 80, fe 80 00) */
++static void vc_n8_id(struct vc *vc)
++{
++	u32 id = vc_panel_id(vc);
++
++	vc->samsung = samsung >= 0 ? samsung : (id & 0xffff00) == 0xfe8000;
++	dev_info(vc->dev, "panel id %06x: Samsung block %s%s\n", id,
++		 vc->samsung ? "sent" : "not sent",
++		 samsung >= 0 ? " (videocore.samsung)" : "");
++}
++
++/* step 13: backlight [+ Samsung block] [+ sleep out] */
++static int vc_n8_wake(struct vc *vc, bool cold)
++{
++	struct dcs c[4 + ARRAY_SIZE(n8_samsung_block) + 1] = {
++		{ 0x00, 0 },
++		{ 0x53, 1, { 0x3f } },
++		{ 0x51, 1, { brightness } },
++		{ 0x55, 1, { 0x01 } },
++	};
++	unsigned int n = 4;
++
++	if (vc->samsung) {
++		memcpy(c + n, n8_samsung_block, sizeof(n8_samsung_block));
++		n += ARRAY_SIZE(n8_samsung_block);
++	}
++	if (cold)
++		c[n++] = (struct dcs){ 0x11, 0 };
++	return dspc_batch(vc, c, n);
++}
++
++/* step 17: mode [+ 51 ff, 53 20 with the Samsung block] [+ window (cold)] */
++static int vc_n8_mode(struct vc *vc, bool cold)
++{
++	struct dcs c[8] = {
++		{ 0x26, 1, { 0x01 } },
++		{ 0x36, 1, { 0xd4 } },
++		{ 0x3a, 1, { 0x07 } },
++	};
++	unsigned int n = 3;
++
++	if (vc->samsung) {
++		c[n++] = (struct dcs){ 0x51, 1, { 0xff } };
++		c[n++] = (struct dcs){ 0x53, 1, { 0x20 } };
++	}
++	if (cold)
++		n += vc_n8_window(vc, c + n);
++	return dspc_batch(vc, c, n);
++}
++
++/* op 8: read 05 (dsi errors), display on and mode again, read 05 */
++static int vc_n8_op8(struct vc *vc)
++{
++	const struct dcs on[] = {
++		{ 0x29, 0 },
++		{ 0x26, 1, { 0x01 } },
++		{ 0x36, 1, { 0xd4 } },
++		{ 0x35, 1, { 0x00 } },
++		{ 0x34, 0 },
++		{ 0x3a, 1, { 0x07 } },
++		{ 0x38, 0 },
++		{ 0x13, 0 },
++		{ 0x53, 1, { 0x3f } },
++		{ 0x51, 1, { brightness } },
++		{ 0x55, 1, { 0x01 } },
++	};
++	u8 e0 = 0, e1 = 0;
++	int r0, r1, ret;
++
++	r0 = dspc_read(vc, 0x05, &e0, 1);
++	ret = dspc_batch(vc, on, ARRAY_SIZE(on));
++	r1 = dspc_read(vc, 0x05, &e1, 1);
++	dev_info(vc->dev, "panel op 8: 05 = %02x (%d), %02x (%d)\n",
++		 e0, r0, e1, r1);
++	return ret;
++}
++
++/*
++ * after power 0x81 and the status reads. cold: power 0x41, 10 us, 0x40,
++ * 125 ms; both: nop + id reads, config, 51 ms, backlight [+ Samsung]
++ * [+ sleep out, 120 ms], config, mode [+ window]. warm then reads the
++ * status and runs op 8 (like vc_panel_warm), the first refresh composes;
++ * cold composes in vc_thread
++ */
++static int vc_n8_power(struct vc *vc, bool cold)
++{
++	static const struct dcs nop[] = { { 0x00, 0 } };
++	int ret;
++
++	if (cold) {
++		ret = dspc_simple(vc, 2, 0x41);		/* power mode 9 */
++		udelay(10);
++		if (!ret)
++			ret = dspc_simple(vc, 2, 0x40);	/* power mode 8 */
++		if (ret)
++			return ret;
++		vchi_pump(vc, 125, NULL);
++	}
++	ret = dspc_batch(vc, nop, ARRAY_SIZE(nop));
++	if (ret)
++		return ret;
++	vc_n8_id(vc);
++	ret = dspc_config(vc);
++	if (ret)
++		return ret;
++	vchi_pump(vc, 51, NULL);
++	ret = vc_n8_wake(vc, cold);
++	if (ret)
++		return ret;
++	if (cold)
++		vchi_pump(vc, 120, NULL);
++	ret = dspc_config(vc);
++	if (!ret)
++		ret = vc_n8_mode(vc, cold);
++	if (ret || cold)
++		return ret;
++	vc_panel_status(vc);
++	return vc_panel_op8(vc);
++}
++
+ static int vc_panel_warm(struct vc *vc)
+ {
+ 	const struct dcs bl[] = {
+@@ -1479,12 +1664,18 @@ static int vc_panel_on(struct vc *vc)
+ 		ret = dspc_config(vc);
+ 	if (!ret)
+ 		ret = dspc_simple(vc, 5, 0);		/* ping */
++	/* the N8 powers up (mode 11) before the status reads */
++	if (!ret && vc->n8)
++		ret = dspc_simple(vc, 2, 0x81);
+ 	if (ret)
+ 		return ret;
+ 	pm = vc_panel_status(vc);
+ 	is_cold = cold >= 0 ? cold : pm < 0 || !(pm & 0x04);
+ 	dev_info(vc->dev, "panel power-up: %s path\n", is_cold ? "cold" : "warm");
+-	ret = is_cold ? vc_panel_cold(vc) : vc_panel_warm(vc);
++	if (vc->n8)
++		ret = vc_n8_power(vc, is_cold);
++	else
++		ret = is_cold ? vc_panel_cold(vc) : vc_panel_warm(vc);
+ 	return ret ? ret : is_cold;
+ }
+ 
+@@ -1533,8 +1724,8 @@ static int bufm_write(struct vc *vc, u32 y, u32 h)
+ {
+ 	u32 m[15] = { BUFM_WRITE_IMAGE, vc->resource,
+ 		      rgb565 ? VC_IMG_BUF_565 : VC_IMG_BUF_TYPE, 0,
+-		      VC_W, VC_H, VC_PITCH, 0, y << 16, VC_W << 16, h << 16,
+-		      0, y, VC_W, h };
++		      vc->w, vc->h, VC_PITCH, 0, y << 16, vc->w << 16, h << 16,
++		      0, y, vc->w, h };
+ 	u8 *data = vc->push + y * VC_PITCH;
+ 	u32 status, nchunks, rows, csize, last, i, size, off, total, room;
+ 	__le32 w[15];
+@@ -1569,7 +1760,7 @@ static int bufm_write(struct vc *vc, u32 y, u32 h)
+ 	if (total > h * VC_PITCH)
+ 		data = vc->push;
+ 	room = VC_FB_SIZE - (data - (u8 *)vc->push);
+-	if (h < VC_H && vc->partial_log < 4) {
++	if (h < vc->h && vc->partial_log < 4) {
+ 		vc->partial_log++;
+ 		dev_info(vc->dev, "partial rows %u+%u: VC asked %u x %u rows, %u bytes -> data from row %u\n",
+ 			 y, h, nchunks, rows, total,
+@@ -1621,8 +1812,8 @@ static int vc_display_setup(struct vc *vc)
+ 		return -ENODEV;
+ 	}
+ 	a[0] = rgb565 ? VC_IMG_RES_565 : VC_IMG_RES_TYPE;
+-	a[1] = VC_W;
+-	a[2] = VC_H;
++	a[1] = vc->w;
++	a[2] = vc->h;
+ 	ret = disp_cmd(vc, DISP_RES_CREATE, a, 3, true, &vc->resource);
+ 	if (ret)
+ 		return ret;
+@@ -1630,7 +1821,7 @@ static int vc_display_setup(struct vc *vc)
+ 		dev_err(vc->dev, "ResourceCreate failed\n");
+ 		return -ENOMEM;
+ 	}
+-	ret = bufm_write(vc, 0, VC_H);
++	ret = bufm_write(vc, 0, vc->h);
+ 	if (ret)
+ 		return ret;
+ 
+@@ -1640,16 +1831,16 @@ static int vc_display_setup(struct vc *vc)
+ 		return ret;
+ 	a[0] = update;
+ 	a[1] = vc->display;
+-	a[2] = (u32)-400;			/* layer */
++	a[2] = vc->n8 ? 4 : (u32)-400;		/* layer, as each ROM does */
+ 	a[3] = 0;
+ 	a[4] = 0;
+-	a[5] = VC_W;
+-	a[6] = VC_H;
++	a[5] = vc->w;
++	a[6] = vc->h;
+ 	a[7] = vc->resource;
+ 	a[8] = 0;
+ 	a[9] = 0;
+-	a[10] = VC_W << 16;
+-	a[11] = VC_H << 16;
++	a[10] = vc->w << 16;
++	a[11] = vc->h << 16;
+ 	a[12] = 1;				/* fixed alpha */
+ 	a[13] = 0xff;
+ 	a[14] = 0;
+@@ -1685,9 +1876,12 @@ static int vc_display_update(struct vc *vc, u32 y, u32 h)
+ 	u32 a[6], update;
+ 	int ret;
+ 
+-	/* Symbian repeats 0x35 every refresh, the dma mode sends it once */
++	/* Symbian repeats 0x35 every refresh, the dma mode sends it once.
++	 * the N8 sends its window and 2c every time */
+ 	ret = 0;
+-	if (vc->first_refresh)
++	if (vc->n8)
++		ret = vc_n8_frame(vc);
++	else if (vc->first_refresh)
+ 		ret = dspc_batch(vc, first, ARRAY_SIZE(first));
+ 	else if (!vc->dma_ok || !vc->te_on)
+ 		ret = dspc_batch(vc, te_on, ARRAY_SIZE(te_on));
+@@ -1707,7 +1901,7 @@ static int vc_display_update(struct vc *vc, u32 y, u32 h)
+ 	a[1] = vc->element;
+ 	a[2] = 0;
+ 	a[3] = y;
+-	a[4] = VC_W;
++	a[4] = vc->w;
+ 	a[5] = h;
+ 	ret = disp_cmd(vc, DISP_ELEMENT_MOD, a, 6, false, NULL);
+ 	if (ret)
+@@ -1730,24 +1924,24 @@ static void vc_test_pattern(struct vc *vc)
+ 	u32 c;
+ 	int ret;
+ 
+-	for (y = 0; y < VC_H; y++)
+-		for (x = 0; x < VC_W; x++) {
+-			c = y < VC_H * 3 / 4 ? bars[x * 8 / VC_W] :
+-			    (x < VC_W / 2 ? 0xffffff : 0);
++	for (y = 0; y < vc->h; y++, fb += VC_PITCH)
++		for (x = 0; x < vc->w; x++) {
++			c = y < vc->h * 3 / 4 ? bars[x * 8 / vc->w] :
++			    (x < vc->w / 2 ? 0xffffff : 0);
+ 			if (rgb565)
+-				((u16 *)fb)[y * VC_W + x] = vc_565(c);
++				((u16 *)fb)[x] = vc_565(c);
+ 			else
+-				((u32 *)fb)[y * VC_W + x] = c;
++				((u32 *)fb)[x] = c;
+ 		}
+ 	vc->push_ready = true;
+-	ret = vc_display_update(vc, 0, VC_H);
++	ret = vc_display_update(vc, 0, vc->h);
+ 	vc->push_ready = false;
+ 	if (!ret)
+ 		vc->frames++;
+ 	dev_info(vc->dev, "test pattern: %d\n", ret);
+ 	vchi_pump(vc, 3000, NULL);
+ 	/* whatever weston drew meanwhile is in fb: push all of it */
+-	vc_mark_dirty(vc, 0, VC_H);
++	vc_mark_dirty(vc, 0, vc->h);
+ }
+ 
+ /*
+@@ -1790,13 +1984,13 @@ static int vc_element_attr(struct vc *vc, const u32 *dst, const u32 *src)
+  */
+ static void vc_disp_probe(struct vc *vc)
+ {
+-	static const u32 dst_down[4] = { 0, 60, VC_W, VC_H - 60 };
+-	static const u32 src_top[4] = { 0, 0, VC_W << 16, (VC_H - 60) << 16 };
+-	static const u32 dst_full[4] = { 0, 0, VC_W, VC_H };
+-	static const u32 src_scroll[4] = { 0, 60 << 16, VC_W << 16,
+-					   (VC_H - 60) << 16 };
+-	static const u32 dst_scroll[4] = { 0, 0, VC_W, VC_H - 60 };
+-	static const u32 src_full[4] = { 0, 0, VC_W << 16, VC_H << 16 };
++	const u32 dst_down[4] = { 0, 60, vc->w, vc->h - 60 };
++	const u32 src_top[4] = { 0, 0, vc->w << 16, (vc->h - 60) << 16 };
++	const u32 dst_full[4] = { 0, 0, vc->w, vc->h };
++	const u32 src_scroll[4] = { 0, 60 << 16, vc->w << 16,
++				    (vc->h - 60) << 16 };
++	const u32 dst_scroll[4] = { 0, 0, vc->w, vc->h - 60 };
++	const u32 src_full[4] = { 0, 0, vc->w << 16, vc->h << 16 };
+ 	int ret;
+ 
+ 	ret = vc_element_attr(vc, dst_down, src_top);
+@@ -1972,8 +2166,8 @@ static void vc_gce_show(struct vc *vc, u32 sid, u32 handle, u32 w, u32 h)
+ 	a[3] = handle;
+ 	a[4] = vc->display;
+ 	a[5] = 10;			/* layer, ours is -400 */
+-	a[6] = (VC_W - w) / 2;
+-	a[7] = (VC_H - h) / 2;
++	a[6] = (vc->w - w) / 2;
++	a[7] = (vc->h - h) / 2;
+ 	a[8] = w;
+ 	a[9] = h;
+ 	a[10] = 0;
+@@ -2153,9 +2347,13 @@ static int vc_thread(void *arg)
+ 		}
+ 	} else if (!ret) {
+ 		/* warm: the first refresh (op 3) composes */
+-		ret = dspc_matrix(vc);
+-		if (!ret)
+-			ret = dspc_batch(vc, first, ARRAY_SIZE(first));
++		if (vc->n8) {
++			ret = vc_n8_frame(vc);
++		} else {
++			ret = dspc_matrix(vc);
++			if (!ret)
++				ret = dspc_batch(vc, first, ARRAY_SIZE(first));
++		}
+ 		if (!ret)
+ 			ret = vc_display_setup(vc);
+ 	}
+@@ -2171,7 +2369,7 @@ static int vc_thread(void *arg)
+ 	if (is_cold)
+ 		WRITE_ONCE(vc->dirty, true);
+ 	vc->ready = true;
+-	dev_info(vc->dev, "display up, %ux%u\n", VC_W, VC_H);
++	dev_info(vc->dev, "display up, %ux%u\n", vc->w, vc->h);
+ 	if (khrn_probe)
+ 		vc_khrn_probe(vc);
+ 	vc->dma_ok = vc->gfx_ok;
+@@ -2218,7 +2416,7 @@ static int vc_thread(void *arg)
+ 			vc->st_next = jiffies + 10 * HZ;
+ 		}
+ 		if (READ_ONCE(vc->dirty)) {
+-			u32 y0 = 0, y1 = VC_H;
++			u32 y0 = 0, y1 = vc->h;
+ 			unsigned long flags;
+ 			u64 t0;
+ 
+@@ -2230,7 +2428,7 @@ static int vc_thread(void *arg)
+ 				y0 = vc->band_y0;
+ 				y1 = vc->band_y1;
+ 			}
+-			vc->band_y0 = VC_H;
++			vc->band_y0 = vc->h;
+ 			vc->band_y1 = 0;
+ 			spin_unlock_irqrestore(&vc->band_lock, flags);
+ 			t0 = ktime_get_ns();
+@@ -2258,7 +2456,7 @@ static int vc_thread(void *arg)
+ /* ---- drm ---- */
+ 
+ /*
+- * KMS on top of the push thread: one fixed 640x480 plane. a commit copies
++ * KMS on top of the push thread: one fixed plane of the panel's size. a commit copies
+  * the damage into vc->fb and wakes the thread, faster frames get merged. no
+  * vblank irq, the atomic helpers fake the events
+  */
+@@ -2305,10 +2503,10 @@ static void vc_copy_changed_rows(struct vc *vc, const struct iosys_map *src,
+ {
+ 	const u8 *s = src->vaddr;
+ 	u8 *d = vc->fb;
+-	u32 y, y0 = VC_H, y1 = 0;
++	u32 y, y0 = vc->h, y1 = 0;
+ 
+-	for (y = 0; y < VC_H; y++, s += fb->pitches[0], d += VC_PITCH) {
+-		vc_row(vc, vc->row, s, fb->format, 0, VC_W);
++	for (y = 0; y < vc->h; y++, s += fb->pitches[0], d += VC_PITCH) {
++		vc_row(vc, vc->row, s, fb->format, 0, vc->w);
+ 		if (!memcmp(d, vc->row, VC_PITCH))
+ 			continue;
+ 		memcpy(d, vc->row, VC_PITCH);
+@@ -2351,8 +2549,8 @@ static void vc_pipe_enable(struct drm_simple_display_pipe *pipe,
+ 			   struct drm_crtc_state *crtc_state,
+ 			   struct drm_plane_state *plane_state)
+ {
+-	struct drm_rect rect = DRM_RECT_INIT(0, 0, VC_W, VC_H);
+ 	struct vc *vc = to_vc(pipe->crtc.dev);
++	struct drm_rect rect = DRM_RECT_INIT(0, 0, vc->w, vc->h);
+ 
+ 	vc_copy_rect(vc, plane_state, &rect, false);
+ }
+@@ -2364,7 +2562,7 @@ static void vc_pipe_disable(struct drm_simple_display_pipe *pipe)
+ 	mutex_lock(&vc->fb_lock);
+ 	memset(vc->fb, 0, VC_FB_SIZE);
+ 	mutex_unlock(&vc->fb_lock);
+-	vc_mark_dirty(vc, 0, VC_H);
++	vc_mark_dirty(vc, 0, vc->h);
+ }
+ 
+ static void vc_pipe_update(struct drm_simple_display_pipe *pipe,
+@@ -2395,14 +2593,16 @@ static const u32 vc_formats[] = { DRM_FORMAT_XRGB8888, DRM_FORMAT_RGB565 };
+ static const u64 vc_modifiers[] = { DRM_FORMAT_MOD_LINEAR,
+ 				    DRM_FORMAT_MOD_INVALID };
+ 
+-/* 2.46" VGA, 50 x 37 mm, 60 Hz */
+-static const struct drm_display_mode vc_mode = {
+-	DRM_MODE_INIT(60, VC_W, VC_H, 50, 37),
+-};
+-
+ static int vc_conn_get_modes(struct drm_connector *conn)
+ {
+-	return drm_connector_helper_get_modes_fixed(conn, &vc_mode);
++	struct vc *vc = to_vc(conn->dev);
++	/* E6: 2.46" VGA, 50 x 37 mm; N8: 3.5" nHD, 43.2 x 76.8 mm. 60 Hz */
++	const struct drm_display_mode mode = {
++		DRM_MODE_INIT(60, vc->w, vc->h, vc->n8 ? 43 : 50,
++			      vc->n8 ? 77 : 37),
++	};
++
++	return drm_connector_helper_get_modes_fixed(conn, &mode);
+ }
+ 
+ static const struct drm_connector_helper_funcs vc_conn_helper_funcs = {
+@@ -2443,8 +2643,8 @@ static int vc_drm_init(struct vc *vc)
+ 	ret = drmm_mode_config_init(drm);
+ 	if (ret)
+ 		return ret;
+-	drm->mode_config.min_width = drm->mode_config.max_width = VC_W;
+-	drm->mode_config.min_height = drm->mode_config.max_height = VC_H;
++	drm->mode_config.min_width = drm->mode_config.max_width = vc->w;
++	drm->mode_config.min_height = drm->mode_config.max_height = vc->h;
+ 	drm->mode_config.preferred_depth = 24;
+ 	drm->mode_config.funcs = &vc_mode_config_funcs;
+ 
+@@ -2702,11 +2902,21 @@ static int rapuyama_videocore_probe(struct platform_device *pdev)
+ 	if (!vc->tx)
+ 		return -ENOMEM;
+ 	vc->dspc_token = 0x100;
++	vc->n8 = sysfs_streq(panel, "n8");
++	if (!vc->n8 && !sysfs_streq(panel, "e6"))
++		dev_warn(dev, "unknown videocore.panel=%s, using the E6 panel\n",
++			 panel);
++	vc->w = vc->n8 ? 360 : 640;
++	vc->h = vc->n8 ? 640 : 480;
++	if (!dspc_id)
++		dspc_id = vc->n8 ? 6 : 4;
++	dev_info(dev, "panel %s, %ux%u, DSPC interface %u\n",
++		 vc->n8 ? "n8" : "e6", vc->w, vc->h, dspc_id);
+ 	init_waitqueue_head(&vc->wq);
+ 	spin_lock_init(&vc->band_lock);
+ 	mutex_init(&vc->fb_lock);
+ 	mutex_init(&vc->khrn_lock);
+-	vc->band_y0 = VC_H;	/* empty band = push everything */
++	vc->band_y0 = vc->h;	/* empty band = push everything */
+ 	platform_set_drvdata(pdev, vc);
+ 
+ 	/* the gfx DMA engine shares the area, so no exclusive request */
+@@ -2727,7 +2937,9 @@ static int rapuyama_videocore_probe(struct platform_device *pdev)
+ 	if (IS_ERR(vc->run))
+ 		return dev_err_probe(dev, PTR_ERR(vc->run), "no run gpio\n");
+ 
+-	vc->pitch = VC_W * (rgb565 ? 2 : 4);
++	/* the bufman image pitch Symbian uses: w rounded up to 16 pixels
++	 * (N8 0x5c0 for 360 px at 32 bpp, the E6's 640 is already) */
++	vc->pitch = ALIGN(vc->w, 16) * (rgb565 ? 2 : 4);
+ 	vc->fb = vzalloc(VC_FB_SIZE);
+ 	if (!vc->fb)
+ 		return -ENOMEM;

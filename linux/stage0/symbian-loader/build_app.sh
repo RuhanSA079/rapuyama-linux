@@ -13,6 +13,11 @@
 #   ./build_app.sh all                                  -> both
 #   RB_DEFS=-DRB_IMAGE_BOOT ./build_app.sh e6bfix boot_app.cpp 0xe1000024
 #     -> out/e6bfix.sis: boots E:\Image in place (no decompressor)
+#   APP_LIBS="$ROOT/driver/import/wlanhwinit.dso" ./build_app.sh wldump wldump_app.cpp 0xe1000054
+#     -> out/wldump.sis: extra import libraries for the app via APP_LIBS;
+#     APP_CAPS sets the exe's capabilities (default all): a process can only
+#     load DLLs with at least its capabilities, ROM DLLs are often all-tcb;
+#     APP_CXXFLAGS adds compiler flags for the app only (-fexceptions)
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"
@@ -27,6 +32,8 @@ NAME="$1"; SRC="$2"; UID3="$3"
 [ ${#NAME} -eq 6 ] || { echo "name must be 6 chars (template patching)"; exit 1; }
 LUID=$(printf '0x%08x' $((UID3 + 1)))
 UHEX=$(printf '%08x' $((UID3)))
+# LDD=name: own ldd file name (default: same as the app), see runblob.h
+LDDN="${LDD:-$NAME}"
 LHEX=$(printf '%08x' $((LUID)))
 
 KH="$ROOT/symbian/oss.FCL.sf.os.kernelhwsrv"
@@ -59,7 +66,7 @@ COMMON=(
   -nostdinc -fno-exceptions -fno-rtti -fshort-wchar -fno-unit-at-a-time -O2
   -D__SYMBIAN32__ -D__GCCE__ -D__EABI__ -D__MARM__ -D__MARM_ARMV5__ -D__MARM_ARMV6__
   -D__EPOC32__ -D__GCC32__ -D__SUPPORT_CPP_EXCEPTIONS__ -D__GCCV3__ -D__PRODUCT_INCLUDE__='<variant_dummy.h>'
-  -DRB_NAME="\"$NAME\"" ${RB_DEFS:-}
+  -DRB_NAME="\"$NAME\"" -DRB_LDD="\"$LDDN\"" ${RB_DEFS:-}
   -include gcce.h -include "$DRV/gcce_post.h"
   "${INC[@]}"
 )
@@ -70,7 +77,7 @@ echo ">> $NAME: compile"
 $CXX "${COMMON[@]}" -D__KERNEL_MODE__ -D__DLL__ -o "$OUT/ldd.o" "$HERE/runblob_ldd.cpp"
 $CXX "${COMMON[@]}" -D__KERNEL_MODE__ -D__DLL__ -x c++ -o "$OUT/d_entry_cia.o" "$EKA/kernel/arm/d_entry.cia"
 $CXX "${COMMON[@]}" -D__KERNEL_MODE__ -D__DLL__ -o "$OUT/d_entry.o" "$EKA/kernel/arm/d_entry.cpp"
-$CXX "${COMMON[@]}" -D_UNICODE -o "$OUT/app.o" "$HERE/$SRC"
+$CXX "${COMMON[@]}" -D_UNICODE ${APP_CXXFLAGS:-} -o "$OUT/app.o" "$HERE/$SRC"
 $CXX "${COMMON[@]}" -D_UNICODE -x c++ -o "$OUT/uc_exe_cia.o" "$EKA/euser/epoc/arm/uc_exe.cia"
 $CXX "${COMMON[@]}" -D_UNICODE -o "$OUT/uc_exe.o" "$EKA/euser/epoc/arm/uc_exe.cpp"
 
@@ -78,24 +85,24 @@ echo ">> $NAME: link"
 $LD "${LDFLAGS[@]}" --entry _E32Dll -u _E32Dll \
     "$OUT/ldd.o" "$OUT/d_entry.o" "$OUT/d_entry_cia.o" \
     "$DRV/import/EKERN.dso" "$LIBGCC" -o "$OUT/ldd.elf"
-"$E2E" --elfinput="$OUT/ldd.elf" --output="$OUT/$NAME.ldd" \
+"$E2E" --elfinput="$OUT/ldd.elf" --output="$OUT/$LDDN.ldd" \
     --targettype=LDD --uid1=0x10000079 --uid2=0x100000af --uid3="$LUID" \
-    --linkas="$NAME{000a0000}[$LHEX].ldd" --libpath="$DRV/import" \
+    --linkas="$LDDN{000a0000}[$LHEX].ldd" --libpath="$DRV/import" \
     --definput="$DRV/ptdump.def" --dlldata --compressionmethod=none --capability=all
 $LD "${LDFLAGS[@]}" --entry _E32Startup -u _E32Startup \
     "$OUT/app.o" "$OUT/uc_exe.o" "$OUT/uc_exe_cia.o" \
-    "$DRV/import/EUSER.dso" "$DRV/import/EFSRV.dso" "$DRV/import/iscapi.dso" "$LIBGCC" -o "$OUT/app.elf"
+    "$DRV/import/EUSER.dso" "$DRV/import/EFSRV.dso" "$DRV/import/iscapi.dso" ${APP_LIBS:-} "$LIBGCC" -o "$OUT/app.elf"
 "$E2E" --elfinput="$OUT/app.elf" --output="$OUT/${NAME}_0x$UHEX.exe" \
     --targettype=EXE --uid1=0x1000007a --uid2=0x100039ce --uid3="$UID3" \
     --linkas="${NAME}_0x$UHEX{000a0000}[$UHEX].exe" --libpath="$DRV/import" \
-    --capability=all --compressionmethod=none
+    --capability="${APP_CAPS:-all}" --compressionmethod=none
 
 echo ">> $NAME: sis"
 W="$OUT/sis"
 rm -rf "$W"
 mkdir -p "$W/approot/sys/bin" "$W/approot/resource/apps" \
 	"$W/approot/private/10003a3f/import/apps"
-cp "$OUT/${NAME}_0x$UHEX.exe" "$OUT/$NAME.ldd" "$W/approot/sys/bin/"
+cp "$OUT/${NAME}_0x$UHEX.exe" "$OUT/$LDDN.ldd" "$W/approot/sys/bin/"
 # the ptdump reg/loc resources with the names + uid swapped. same string
 # lengths, so only the bytes change; the uid checksum in the header is redone
 python3 - "$DRV/sis/approot" "$W/approot" "$NAME" "$UID3" <<'EOF'

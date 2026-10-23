@@ -13,6 +13,9 @@ KERN_BIN="${KERN_BIN:?set KERN_BIN=/path/to/kern.bin}"
 export ARCH=arm
 export CROSS_COMPILE=arm-linux-gnu-
 
+# kernel changes not in the submodule's upstream commit (patches/)
+"$HERE/apply-patches.sh"
+
 mkdir -p "$KOUT"
 cp "$HERE/e6.config" "$KOUT/.config"
 arm-linux-gnu-gcc -march=armv6k -marm -static -nostdlib -fno-pie -no-pie \
@@ -30,12 +33,35 @@ python3 "$HERE/../../tools/vc_extract.py" "$KERN_BIN" "$KOUT/vcfw"
 ROOTFS="$HERE/../../work/rootfs-alpine"
 "$HERE/../initramfs/alpine.sh" "$ROOTFS"
 
-cp "$HERE/../initramfs/initramfs.list" "$KOUT/initramfs.list"
+# the checked-in list has absolute paths from the author's machine: point
+# them at this checkout. the asm /sbin/init goes in a subdir, KOUT/init would
+# clash with the kernel's init/ objects
+mkdir -p "$KOUT/rootfs-extra"
+arm-linux-gnu-gcc -march=armv6k -marm -static -nostdlib \
+	-o "$KOUT/rootfs-extra/init" "$HERE/../initramfs/init.S"
+sed -E -e "s#^(file /bin/busybox ).*( 755 0 0)#\1$(realpath "$HERE/../../work/dl/busybox-armv5l")\2#" \
+	-e "s#^(file /sbin/init ).*( 755 0 0)#\1$KOUT/rootfs-extra/init\2#" \
+	-e "s#/[^ ]*/linux/initramfs/#$(realpath "$HERE/../initramfs")/#" \
+	"$HERE/../initramfs/initramfs.list" > "$KOUT/initramfs.list"
+
+# input / sensor test tools (linux/initramfs/{keytest,touchtest}.c, sensortest.sh)
+for t in keytest touchtest physdump fbtouch; do
+	arm-linux-gnu-gcc -march=armv6k -marm -static -nostdlib -fno-pie -no-pie \
+		-ffreestanding -fno-builtin -fomit-frame-pointer -fno-stack-protector \
+		-Os -Wall -Wextra -Werror \
+		-Wl,-e,_start -o "$KOUT/rootfs-extra/$t" "$HERE/../initramfs/$t.c" -lgcc
+done
 {
 	# the list has no trailing newline, start on a fresh line
 	printf '\ndir /usr 755 0 0\ndir /usr/bin 755 0 0\n'
 	printf 'file /usr/bin/fbtest %s 755 0 0\n' "$KOUT/fbtest"
 	printf 'file /usr/bin/vcprobe %s 755 0 0\n' "$KOUT/vcprobe"
+	printf 'file /usr/bin/keytest %s 755 0 0\n' "$KOUT/rootfs-extra/keytest"
+	printf 'file /usr/bin/touchtest %s 755 0 0\n' "$KOUT/rootfs-extra/touchtest"
+	printf 'file /usr/bin/sensortest %s 755 0 0\n' "$HERE/../initramfs/sensortest.sh"
+	printf 'file /usr/bin/physdump %s 755 0 0\n' "$KOUT/rootfs-extra/physdump"
+	printf 'file /usr/bin/fbtouch %s 755 0 0\n' "$KOUT/rootfs-extra/fbtouch"
+	printf 'file /usr/bin/swddump %s 755 0 0\n' "$HERE/../initramfs/swddump.sh"
 	printf 'file /usr/bin/khrntest %s 755 0 0\n' "$KOUT/vc-khrn/khrntest"
 	printf 'file /usr/bin/vctri %s 755 0 0\n' "$KOUT/vc-khrn/vctri"
 	printf 'file /usr/lib/libvcgl.so %s 755 0 0\n' "$KOUT/vc-khrn/libvcgl.so"
@@ -65,6 +91,15 @@ cp "$HERE/../initramfs/initramfs.list" "$KOUT/initramfs.list"
 "$KSRC/scripts/config" --file "$KOUT/.config" --set-val INITRAMFS_ROOT_UID "$(id -u)"
 "$KSRC/scripts/config" --file "$KOUT/.config" --set-val INITRAMFS_ROOT_GID "$(id -g)"
 "$KSRC/scripts/config" --file "$KOUT/.config" --disable INITRAMFS_COMPRESSION_GZIP --enable INITRAMFS_COMPRESSION_XZ
+# n8 chips (linux/boot/n8.dts), same as tools/build-n8-kit.sh: idle on
+# the e6, its dtbs don't name them
+"$KSRC/scripts/config" --file "$KOUT/.config" --enable KEYBOARD_GPIO_POLLED \
+	--enable IIO --enable IIO_BUFFER --enable IIO_TRIGGERED_BUFFER \
+	--enable IIO_ST_ACCEL_3AXIS --enable IIO_ST_ACCEL_I2C_3AXIS \
+	--enable AK8974 --enable SENSORS_TSL2563 \
+	--enable RMI4_CORE --enable RMI4_I2C --enable RMI4_2D_SENSOR --enable RMI4_F11
+# DEVMEM_ALL=1: /dev/mem for all of RAM (physdump / swddump, firmware dumps)
+[ "${DEVMEM_ALL:-}" = 1 ] && "$KSRC/scripts/config" --file "$KOUT/.config" --disable STRICT_DEVMEM
 # modem experiments off (drivers/misc/rapuyama_*), they made boots die
 "$KSRC/scripts/config" --file "$KOUT/.config" --disable RAPUYAMA_MODEM
 
@@ -75,6 +110,11 @@ make -C "$KSRC" O="$KOUT" scripts_dtc
 for v in vc vc-565 vc-565-charger vc-khrn vc-gl; do
 	"$KOUT/scripts/dtc/dtc" -I dts -O dtb -i "$HERE/../boot" \
 		-o "$KOUT/e6-$v.dtb" "$HERE/../boot/e6-$v.dts"
+done
+# other phones on the same soc (docs/other-phones.md)
+for v in n8 e7-vc; do
+	"$KOUT/scripts/dtc/dtc" -I dts -O dtb -i "$HERE/../boot" \
+		-o "$KOUT/$v.dtb" "$HERE/../boot/$v.dts"
 done
 
 echo

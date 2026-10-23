@@ -121,7 +121,13 @@ int main(int argc, char **argv){
 	glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 20, vbo ? (void *)8 : verts+2);
 	glEnableVertexAttribArray(0);
 	glEnableVertexAttribArray(1);
-	glViewport(0, 0, 640, 480);
+	{
+		EGLint w=640, h=480;
+
+		eglQuerySurface(dpy, surf, EGL_WIDTH, &w);
+		eglQuerySurface(dpy, surf, EGL_HEIGHT, &h);
+		glViewport(0, 0, w, h);
+	}
 
 	t0=now();
 	do{

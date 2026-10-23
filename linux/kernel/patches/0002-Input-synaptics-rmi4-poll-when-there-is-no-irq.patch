@@ -1,0 +1,125 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Ruhan van der Berg <35257374+RuhanSA079@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 19:42:26 +0200
+Subject: [PATCH 2/6] Input: synaptics-rmi4 - poll when there is no irq
+
+Boards like the Nokia N8 wire the RMI4 ATTN line to a gpio without a
+working interrupt. With pdata->irq == 0 the core now runs a delayed work
+every poll_ms (default 15) that does what the threaded irq handler does,
+started and stopped by rmi_enable_irq() / rmi_disable_irq(). Devices with
+an irq are unchanged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/input/rmi4/rmi_driver.c | 55 +++++++++++++++++++++++++++++++++
+ include/linux/rmi.h             |  3 ++
+ 2 files changed, 58 insertions(+)
+
+diff --git a/drivers/input/rmi4/rmi_driver.c b/drivers/input/rmi4/rmi_driver.c
+index 2168b6cd7..43212d9e5 100644
+--- a/drivers/input/rmi4/rmi_driver.c
++++ b/drivers/input/rmi4/rmi_driver.c
+@@ -214,6 +214,38 @@ static irqreturn_t rmi_irq_fn(int irq, void *dev_id)
+ 	return IRQ_HANDLED;
+ }
+ 
++/*
++ * Polling for boards whose ATTN line has no usable interrupt (Nokia N8: the
++ * TM1284 ATTN pin goes to a RapuYama gpio without a working irq). While the
++ * device is enabled, the interrupt status is read every poll_ms, which is
++ * what the threaded irq handler would do on ATTN.
++ */
++static unsigned int poll_ms = 15;
++module_param(poll_ms, uint, 0644);
++MODULE_PARM_DESC(poll_ms, "poll interval in ms for devices without an irq");
++
++static void rmi_poll_work(struct work_struct *work)
++{
++	struct rmi_driver_data *data =
++		container_of(to_delayed_work(work), struct rmi_driver_data, poll_work);
++	int ret;
++
++	ret = rmi_process_interrupt_requests(data->rmi_dev);
++	if (ret)
++		rmi_dbg(RMI_DEBUG_CORE, &data->rmi_dev->dev,
++			"Failed to process interrupt request: %d\n", ret);
++	if (data->enabled)
++		schedule_delayed_work(&data->poll_work, msecs_to_jiffies(poll_ms));
++}
++
++static void rmi_poll_stop(void *arg)
++{
++	struct rmi_driver_data *data = arg;
++
++	data->enabled = false;
++	cancel_delayed_work_sync(&data->poll_work);
++}
++
+ static int rmi_irq_init(struct rmi_device *rmi_dev)
+ {
+ 	struct rmi_device_platform_data *pdata = rmi_get_platform_data(rmi_dev);
+@@ -221,6 +253,17 @@ static int rmi_irq_init(struct rmi_device *rmi_dev)
+ 	int irq_flags = irq_get_trigger_type(pdata->irq);
+ 	int ret;
+ 
++	if (!pdata->irq) {
++		INIT_DELAYED_WORK(&data->poll_work, rmi_poll_work);
++		ret = devm_add_action_or_reset(&rmi_dev->dev, rmi_poll_stop, data);
++		if (ret)
++			return ret;
++		data->enabled = true;
++		schedule_delayed_work(&data->poll_work, msecs_to_jiffies(poll_ms));
++		dev_info(&rmi_dev->dev, "no irq, polling every %u ms\n", poll_ms);
++		return 0;
++	}
++
+ 	if (!irq_flags)
+ 		irq_flags = IRQF_TRIGGER_LOW;
+ 
+@@ -886,6 +929,12 @@ void rmi_enable_irq(struct rmi_device *rmi_dev, bool clear_wake)
+ 	if (data->enabled)
+ 		goto out;
+ 
++	if (!irq) {
++		data->enabled = true;
++		schedule_delayed_work(&data->poll_work, 0);
++		goto out;
++	}
++
+ 	enable_irq(irq);
+ 	data->enabled = true;
+ 	if (clear_wake && device_may_wakeup(rmi_dev->xport->dev)) {
+@@ -922,6 +971,12 @@ void rmi_disable_irq(struct rmi_device *rmi_dev, bool enable_wake)
+ 		goto out;
+ 
+ 	data->enabled = false;
++	if (!irq) {
++		/* the work sees !enabled and stops rescheduling itself */
++		mutex_unlock(&data->enabled_mutex);
++		cancel_delayed_work_sync(&data->poll_work);
++		return;
++	}
+ 	disable_irq(irq);
+ 	if (enable_wake && device_may_wakeup(rmi_dev->xport->dev)) {
+ 		retval = enable_irq_wake(irq);
+diff --git a/include/linux/rmi.h b/include/linux/rmi.h
+index ab7eea01a..7b07013c8 100644
+--- a/include/linux/rmi.h
++++ b/include/linux/rmi.h
+@@ -14,6 +14,7 @@
+ #include <linux/list.h>
+ #include <linux/module.h>
+ #include <linux/types.h>
++#include <linux/workqueue.h>
+ 
+ #define NAME_BUFFER_SIZE 256
+ 
+@@ -360,6 +361,8 @@ struct rmi_driver_data {
+ 	u8 num_tx_electrodes;
+ 
+ 	bool enabled;
++	/* no irq line (pdata->irq == 0): rmi_driver polls with this instead */
++	struct delayed_work poll_work;
+ 	struct mutex enabled_mutex;
+ 
+ 	struct rmi4_attn_data attn_data;

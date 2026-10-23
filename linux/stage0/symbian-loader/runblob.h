@@ -14,7 +14,12 @@
 #endif
 #define RB_LIT(n, s) _LIT(n, s)
 RB_LIT(KRunBlobName, RB_NAME);
-RB_LIT(KRunBlobLdd, RB_NAME ".ldd");
+// the ldd file can be named apart from the device (-DRB_LDD='"e6bfx3"'): a new
+// file name means the phone can't keep loading a stale copy of an older build
+#ifndef RB_LDD
+#define RB_LDD RB_NAME
+#endif
+RB_LIT(KRunBlobLdd, RB_LDD ".ldd");
 
 // returned buffer = up to 32 words the blob wrote (sig/sum + cp15 cpu id)
 const TInt KRunBlobOutBytes=32*4;

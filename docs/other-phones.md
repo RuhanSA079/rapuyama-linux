@@ -8,7 +8,7 @@ The N8 and E7 use the same RapuYama SoC and BCM2727 VideoCore as the E6, so the 
 | --- | --- | --- |
 | Kernel | `Image` | the same `Image` |
 | Loader | `e6bfix.sis` | the same `e6bfix.sis` (only uses SoC registers, no E6 firmware addresses) |
-| Device tree | `e6-vc-565.dtb` | `n8-usb.dtb` / `e7-usb.dtb` (test 1), `n8-vc.dtb` / `e7-vc.dtb` (test 2) |
+| Device tree | `e6-vc-565.dtb` | N8: one `n8.dtb` with all hardware verified so far ([`n8-status.md`](n8-status.md)), as `E:\n8.dtb` for `n8boot.sis`. E7: `e7-usb.dtb` (test 1), `e7-vc.dtb` (test 2) |
 | Display | 640x480 LCD, driver set up for it | test 1: off, the Symbian picture just freezes. test 2: the E6 setup (640x480, standard DCS only), the picture is probably wrong, the log tells us what the panel is |
 | Keypad / touch | i2c 0x44 / 0x4a | off (the chips at those addresses may be different ones on these boards) |
 | 240 s reset | serviced by `rapuyama-swd` (`e6.swd=1`) | off: its addresses come from the E6 firmware. The phone resets back to Symbian 0.5..4 min after the boot |
@@ -29,8 +29,9 @@ The N8 and E7 use the same RapuYama SoC and BCM2727 VideoCore as the E6, so the 
 | File | Where it goes |
 | --- | --- |
 | `Image` | phone `E:\Image` (mass memory root) |
-| `n8-usb.dtb` / `e7-usb.dtb` | phone `E:\e6.dtb` for test 1 (the loader always reads that name) |
-| `n8-vc.dtb` / `e7-vc.dtb` | phone `E:\e6.dtb` for test 2 |
+| `n8.dtb` | N8: phone `E:\n8.dtb` (read by `n8boot.sis`) |
+| `e7-usb.dtb` | E7: phone `E:\e6.dtb` for test 1 (`e6bfix.sis` always reads that name) |
+| `e7-vc.dtb` | E7: phone `E:\e6.dtb` for test 2 |
 | `e6bfix.sis` | install on the phone: the loader, icon "e6bfix" |
 | `e6logs.sis` | install on the phone: saves the Linux log after the reset, icon "e6logs" |
 | `parse_klog.py` | PC: turns `klog.bin` into text |
@@ -60,11 +61,23 @@ If nothing shows up on USB: wait 5 minutes, if the phone doesn't come back by it
 
 ## Test 2: display (only after test 1 worked)
 
-Same as test 1, but with `n8-vc.dtb` / `e7-vc.dtb` as `E:\e6.dtb`. About 2 s after the boot the driver restarts the VideoCore: the Symbian picture goes away. After that the screen may stay black, show garbage or show a shifted console, all of that is useful. In the shell:
+Same as test 1, but with `e7-vc.dtb` as `E:\e6.dtb` (the N8 has the VideoCore in `n8.dtb` already). About 2 s after the boot the driver restarts the VideoCore: the Symbian picture goes away. After that the screen may stay black, show garbage or show a shifted console, all of that is useful. In the shell:
 ```sh
 dmesg | grep -i videocore
 ```
 We need the lines `VideoCore booted`, `panel status: ...`, `panel id .. .. ..` and `panel power-up: ...`. The driver only sends standard DCS commands (sleep out, display on, pixel format, brightness), no panel voltage registers. If the screen shows a bright fixed picture for a long time, take the battery out anyway.
+
+## Test 3 (N8): keys, touch and sensors
+
+The N8 kit (`tools/build-n8-kit.sh n8`) has a single `n8.dtb` with the N8 chips `i2cdetect` found (Synaptics TM1284 touch @0x4b, LIS302DL, AK8974, TSL2563, [n8-hardware.md](n8-hardware.md)) plus `gpio-keys-polled` for the side keys, next to the USB shell and the VideoCore (loader B, 30 s start delay). Copy it as `E:\n8.dtb` and boot with `n8boot`. The initramfs has three test tools:
+
+| Tool | What it shows |
+| --- | --- |
+| `keytest` | Key devices and the keys they have (held ones marked), then every press / release / repeat. Volume up/down, menu, camera, camera focus and the lock slider should all show up |
+| `touchtest` | The touch axis ranges, then one line per frame with every finger. On the last finger up it prints the x/y range that was really touched: drag along all four edges, then compare that with the 360x640 panel to see if the axes are swapped or mirrored |
+| `sensortest` | Every IIO sensor and the battery in real units, every 500 ms (`sensortest 200 10`: every 200 ms, 10 samples; `sensortest list`: the channels). Lying flat, the accelerometer z axis should read about +-9.8 m/s2 |
+
+Stop each one with ctrl-c. They are also in the display kernel (`build-vc.sh`). `keyscan` is the level below `keytest`: raw gpio pins, without the `gpio-keys` driver.
 
 ## Don't
 
@@ -90,7 +103,8 @@ We need the lines `VideoCore booted`, `panel status: ...`, `panel id .. .. ..` a
 
 The kernel is the normal E6 one (`linux/kernel/build-vc.sh`, see [`../linux/boot/README.md`](../linux/boot/README.md)), the loader `RB_DEFS=-DRB_IMAGE_BOOT ./build_app.sh e6bfix boot_app.cpp 0xe1000024` and `./build_app.sh e6logs ramread_app.cpp 0xe1000022` in `linux/stage0/symbian-loader`. The device trees:
 ```sh
-for v in n8-usb n8-vc e7-usb e7-vc; do
+for v in n8 e7-usb e7-vc; do
 	dtc -I dts -O dtb -i linux/boot -o $v.dtb linux/boot/$v.dts
 done
 ```
+On Debian / Ubuntu, `tools/build-n8-kit.sh [n8|e7]` does all of the above for test 1 (USB shell kernel, `*-usb.dtb`, both SIS files) and puts the kit with `SHA256SUMS` in `out/<phone>-test1/`. Its loader is `n8boot.sis` / `e7boot.sis` instead of `e6bfix.sis`: the same loader, built with `-DRB_DTB` so it reads `E:\n8.dtb` / `E:\e7.dtb` instead of `E:\e6.dtb` (no renaming to `e6.dtb`). N8 hardware read off the schematics (keys, I2C buses, touch, display, UART pads) is in [`n8-hardware.md`](n8-hardware.md), what works under Linux so far in [`n8-status.md`](n8-status.md).
