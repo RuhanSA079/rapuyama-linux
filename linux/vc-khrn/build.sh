@@ -17,7 +17,7 @@ SYSROOT="$TOP/work/sysroot-alpine"
 
 "$TOP/linux/initramfs/sysroot.sh" "$SYSROOT"
 CC=(clang --target=armv6-alpine-linux-musleabihf -march=armv6kz -mfloat-abi=hard
-	-mfpu=vfp --sysroot="$SYSROOT" --ld-path=/usr/bin/arm-linux-gnu-ld
+	-mfpu=vfp --sysroot="$SYSROOT" --ld-path="$(command -v arm-linux-gnu-ld)"
 	-static-libgcc -O2 -Wall -Wextra -Werror)
 [ -n "${MOCK:-}" ] && CC+=(-DKHRN_MOCK)
 mkdir -p "$OUT"

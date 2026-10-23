@@ -30,7 +30,16 @@ python3 "$HERE/../../tools/vc_extract.py" "$KERN_BIN" "$KOUT/vcfw"
 ROOTFS="$HERE/../../work/rootfs-alpine"
 "$HERE/../initramfs/alpine.sh" "$ROOTFS"
 
-cp "$HERE/../initramfs/initramfs.list" "$KOUT/initramfs.list"
+# the checked-in list has absolute paths from the author's machine: point
+# them at this checkout. the asm /sbin/init goes in a subdir, KOUT/init would
+# clash with the kernel's init/ objects
+mkdir -p "$KOUT/rootfs-extra"
+arm-linux-gnu-gcc -march=armv6k -marm -static -nostdlib \
+	-o "$KOUT/rootfs-extra/init" "$HERE/../initramfs/init.S"
+sed -E -e "s#^(file /bin/busybox ).*( 755 0 0)#\1$(realpath "$HERE/../../work/dl/busybox-armv5l")\2#" \
+	-e "s#^(file /sbin/init ).*( 755 0 0)#\1$KOUT/rootfs-extra/init\2#" \
+	-e "s#/[^ ]*/linux/initramfs/#$(realpath "$HERE/../initramfs")/#" \
+	"$HERE/../initramfs/initramfs.list" > "$KOUT/initramfs.list"
 {
 	# the list has no trailing newline, start on a fresh line
 	printf '\ndir /usr 755 0 0\ndir /usr/bin 755 0 0\n'
@@ -75,6 +84,11 @@ make -C "$KSRC" O="$KOUT" scripts_dtc
 for v in vc vc-565 vc-565-charger vc-khrn vc-gl; do
 	"$KOUT/scripts/dtc/dtc" -I dts -O dtb -i "$HERE/../boot" \
 		-o "$KOUT/e6-$v.dtb" "$HERE/../boot/e6-$v.dts"
+done
+# other phones on the same soc (docs/other-phones.md)
+for v in n8-vc e7-vc; do
+	"$KOUT/scripts/dtc/dtc" -I dts -O dtb -i "$HERE/../boot" \
+		-o "$KOUT/$v.dtb" "$HERE/../boot/$v.dts"
 done
 
 echo
