@@ -86,9 +86,13 @@ static void DumpL(){
 
 // User::Leave() calls the thread's trap handler with the reason before it
 // throws (us_trp.cpp), so a handler in front of the cleanup stack's one can
-// log the leave code without any TRAP / exception support here
+// log the leave code without any TRAP / exception support here. The cleanup
+// stack casts the current handler to TCleanupTrapHandler and uses its
+// iCleanup (ub_cln.cpp cleanup()), so this one has the same layout (vtable,
+// iCleanup) and carries the original's iCleanup; v4 without it: CBase 68
 class TLogTrap : public TTrapHandler {
 public:
+	TAny* iCleanup;		/* at offset 4, like TCleanupTrapHandler */
 	TTrapHandler* iOld;
 	void Trap(){ if(iOld){iOld->Trap();} }
 	void UnTrap(){ if(iOld){iOld->UnTrap();} }
@@ -106,7 +110,10 @@ static TInt Worker(TAny*){
 	if(!tc || !as){return KErrNoMemory;}
 	CActiveScheduler::Install(as);
 	TLogTrap lt;
+	// SetTrapHandler returns the cleanup stack's handler; nothing touches
+	// the cleanup stack before iCleanup is copied
 	lt.iOld=User::SetTrapHandler(&lt);
+	lt.iCleanup=*(TAny**)((TUint8*)lt.iOld+4);
 	L(_L8("worker: cleanup stack + active scheduler ready\n"));
 	// no TRAP (no exception runtime here): a leave ends this thread, and
 	// the main thread logs how
@@ -120,7 +127,7 @@ GLDEF_C TInt E32Main(){
 	// the worker logs and saves through the same session: without this its
 	// first file call is a bad handle (v2: KERN-EXEC 0)
 	gFs.ShareAuto();
-	L(_L8("wldump v4\n"));
+	L(_L8("wldump v5\n"));
 	RThread t;
 	TInt r=t.Create(_L("wldump-worker"), Worker, 0x8000, 0x1000, 0x100000, NULL);
 	TBuf8<120> b;
