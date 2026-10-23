@@ -99,7 +99,10 @@ static TInt Worker(TAny*){
 
 GLDEF_C TInt E32Main(){
 	if(gFs.Connect()!=KErrNone){return KErrGeneral;}
-	L(_L8("wldump v2\n"));
+	// the worker logs and saves through the same session: without this its
+	// first file call is a bad handle (v2: KERN-EXEC 0)
+	gFs.ShareAuto();
+	L(_L8("wldump v3\n"));
 	RThread t;
 	TInt r=t.Create(_L("wldump-worker"), Worker, 0x8000, 0x1000, 0x100000, NULL);
 	TBuf8<120> b;
