@@ -6,8 +6,12 @@
 //   E:\wl_nvs.bin   init data (GetHwInitData)
 //   E:\wl_fw.bin    firmware  (GetHwInitData)
 //   E:\wldump.log   lengths, first bytes, MAC
-// build: APP_LIBS=driver/import/wlanhwinit.dso APP_CAPS=all-tcb
-//        ./build_app.sh wldump wldump_app.cpp 0xe1000054
+// the calls run in a worker thread with its own cleanup stack and active
+// scheduler (the ISI client code under wlanhwinit wants one); the main
+// thread logs how that thread ended, so a leave or crash in NewL shows up
+// as exit type / category / reason instead of a silent panic.
+// build: APP_LIBS="driver/import/wlanhwinit.dso driver/import/euser_full.dso"
+//        APP_CAPS=all-tcb ./build_app.sh wldump wldump_app.cpp 0xe1000054
 #include <e32std.h>
 #include <f32file.h>
 
@@ -56,6 +60,7 @@ static TInt Save(const TDesC& aFile, const TUint8* aPtr, TUint aLen){
 }
 
 static void DumpL(){
+	L(_L8("calling CWlanHwInit::NewL\n"));
 	CWlanHwInit* hw=CWlanHwInit::NewL();
 	L(_L8("CWlanHwInit::NewL ok\n"));
 
@@ -79,15 +84,42 @@ static void DumpL(){
 	// needed and its class layout isn't known here
 }
 
-GLDEF_C TInt E32Main(){
+static TInt Worker(TAny*){
 	CTrapCleanup* tc=CTrapCleanup::New();
-	if(gFs.Connect()!=KErrNone){return KErrGeneral;}
-	L(_L8("wldump v1\n"));
-	// no TRAP: the EUSER.dso here has no TTrap exports. a leave (only on
-	// out of memory) panics the app, the log shows how far it got
+	CActiveScheduler* as=new CActiveScheduler;
+	if(!tc || !as){return KErrNoMemory;}
+	CActiveScheduler::Install(as);
+	L(_L8("worker: cleanup stack + active scheduler ready\n"));
+	// no TRAP (no exception runtime here): a leave ends this thread, and
+	// the main thread logs how
 	DumpL();
-	L(_L8("done\n"));
+	L(_L8("worker: done\n"));
+	return KErrNone;
+}
+
+GLDEF_C TInt E32Main(){
+	if(gFs.Connect()!=KErrNone){return KErrGeneral;}
+	L(_L8("wldump v2\n"));
+	RThread t;
+	TInt r=t.Create(_L("wldump-worker"), Worker, 0x8000, 0x1000, 0x100000, NULL);
+	TBuf8<120> b;
+	if(r!=KErrNone){
+		b.Format(_L8("RThread::Create=%d\n"), r);
+		L(b);
+		gFs.Close();
+		return r;
+	}
+	TRequestStatus st;
+	t.Logon(st);
+	t.Resume();
+	User::WaitForRequest(st);
+	TExitCategoryName cat=t.ExitCategory();
+	TBuf8<KMaxExitCategoryName> cat8;
+	cat8.Copy(cat);
+	b.Format(_L8("worker ended: type %d (0 kill, 1 terminate, 2 panic) category '%S' reason %d\n"),
+		 (TInt)t.ExitType(), &cat8, t.ExitReason());
+	L(b);
+	t.Close();
 	gFs.Close();
-	delete tc;
 	return KErrNone;
 }
