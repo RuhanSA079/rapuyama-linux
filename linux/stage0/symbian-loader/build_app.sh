@@ -16,7 +16,8 @@
 #   APP_LIBS="$ROOT/driver/import/wlanhwinit.dso" ./build_app.sh wldump wldump_app.cpp 0xe1000054
 #     -> out/wldump.sis: extra import libraries for the app via APP_LIBS;
 #     APP_CAPS sets the exe's capabilities (default all): a process can only
-#     load DLLs with at least its capabilities, ROM DLLs are often all-tcb
+#     load DLLs with at least its capabilities, ROM DLLs are often all-tcb;
+#     APP_CXXFLAGS adds compiler flags for the app only (-fexceptions)
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"
@@ -76,7 +77,7 @@ echo ">> $NAME: compile"
 $CXX "${COMMON[@]}" -D__KERNEL_MODE__ -D__DLL__ -o "$OUT/ldd.o" "$HERE/runblob_ldd.cpp"
 $CXX "${COMMON[@]}" -D__KERNEL_MODE__ -D__DLL__ -x c++ -o "$OUT/d_entry_cia.o" "$EKA/kernel/arm/d_entry.cia"
 $CXX "${COMMON[@]}" -D__KERNEL_MODE__ -D__DLL__ -o "$OUT/d_entry.o" "$EKA/kernel/arm/d_entry.cpp"
-$CXX "${COMMON[@]}" -D_UNICODE -o "$OUT/app.o" "$HERE/$SRC"
+$CXX "${COMMON[@]}" -D_UNICODE ${APP_CXXFLAGS:-} -o "$OUT/app.o" "$HERE/$SRC"
 $CXX "${COMMON[@]}" -D_UNICODE -x c++ -o "$OUT/uc_exe_cia.o" "$EKA/euser/epoc/arm/uc_exe.cia"
 $CXX "${COMMON[@]}" -D_UNICODE -o "$OUT/uc_exe.o" "$EKA/euser/epoc/arm/uc_exe.cpp"
 

@@ -84,42 +84,33 @@ static void DumpL(){
 	// needed and its class layout isn't known here
 }
 
-// User::Leave() calls the thread's trap handler with the reason before it
-// throws (us_trp.cpp), so a handler in front of the cleanup stack's one can
-// log the leave code without any TRAP / exception support here. The cleanup
-// stack casts the current handler to TCleanupTrapHandler and uses its
-// iCleanup (ub_cln.cpp cleanup()), so this one has the same layout (vtable,
-// iCleanup) and carries the original's iCleanup; v4 without it: CBase 68
-class TLogTrap : public TTrapHandler {
-public:
-	TAny* iCleanup;		/* at offset 4, like TCleanupTrapHandler */
-	TTrapHandler* iOld;
-	void Trap(){ if(iOld){iOld->Trap();} }
-	void UnTrap(){ if(iOld){iOld->UnTrap();} }
-	void Leave(TInt aValue){
-		TBuf8<40> b;
-		b.Format(_L8("leave %d\n"), aValue);
-		L(b);
-		if(iOld){iOld->Leave(aValue);}
-	}
-};
+// a leave is a C++ throw of XLeaveException here (leave == throw); with
+// -fexceptions e32cmn.h declares it, and libsupc++ matches the phone's
+// typeinfo by name. GetReason() also ends the leave (Exec::LeaveEnd).
+// v1..v5 had no catch: E32USER-CBase 66, the code was lost
 
 static TInt Worker(TAny*){
 	CTrapCleanup* tc=CTrapCleanup::New();
 	CActiveScheduler* as=new CActiveScheduler;
 	if(!tc || !as){return KErrNoMemory;}
 	CActiveScheduler::Install(as);
-	TLogTrap lt;
-	// SetTrapHandler returns the cleanup stack's handler; nothing touches
-	// the cleanup stack before iCleanup is copied
-	lt.iOld=User::SetTrapHandler(&lt);
-	lt.iCleanup=*(TAny**)((TUint8*)lt.iOld+4);
 	L(_L8("worker: cleanup stack + active scheduler ready\n"));
-	// no TRAP (no exception runtime here): a leave ends this thread, and
-	// the main thread logs how
-	DumpL();
-	L(_L8("worker: done\n"));
-	return KErrNone;
+	// TRAP by hand: built with -fexceptions against the phone's runtime
+	TInt err=KErrNone;
+	TTrapHandler* th=User::MarkCleanupStack();
+	try {
+		DumpL();
+		User::UnMarkCleanupStack(th);
+	} catch(XLeaveException& l) {
+		err=l.GetReason();
+	} catch(...) {
+		err=KErrUnknown;
+		L(_L8("worker: non-leave C++ exception\n"));
+	}
+	TBuf8<48> b;
+	b.Format(_L8("worker: done, leave code %d\n"), err);
+	L(b);
+	return err;
 }
 
 GLDEF_C TInt E32Main(){
@@ -127,7 +118,7 @@ GLDEF_C TInt E32Main(){
 	// the worker logs and saves through the same session: without this its
 	// first file call is a bad handle (v2: KERN-EXEC 0)
 	gFs.ShareAuto();
-	L(_L8("wldump v5\n"));
+	L(_L8("wldump v6\n"));
 	RThread t;
 	TInt r=t.Create(_L("wldump-worker"), Worker, 0x8000, 0x1000, 0x100000, NULL);
 	TBuf8<120> b;
