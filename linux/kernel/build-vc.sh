@@ -45,7 +45,7 @@ sed -E -e "s#^(file /bin/busybox ).*( 755 0 0)#\1$(realpath "$HERE/../../work/dl
 	"$HERE/../initramfs/initramfs.list" > "$KOUT/initramfs.list"
 
 # input / sensor test tools (linux/initramfs/{keytest,touchtest}.c, sensortest.sh)
-for t in keytest touchtest physdump; do
+for t in keytest touchtest physdump fbtouch; do
 	arm-linux-gnu-gcc -march=armv6k -marm -static -nostdlib -fno-pie -no-pie \
 		-ffreestanding -fno-builtin -fomit-frame-pointer -fno-stack-protector \
 		-Os -Wall -Wextra -Werror \
@@ -60,6 +60,7 @@ done
 	printf 'file /usr/bin/touchtest %s 755 0 0\n' "$KOUT/rootfs-extra/touchtest"
 	printf 'file /usr/bin/sensortest %s 755 0 0\n' "$HERE/../initramfs/sensortest.sh"
 	printf 'file /usr/bin/physdump %s 755 0 0\n' "$KOUT/rootfs-extra/physdump"
+	printf 'file /usr/bin/fbtouch %s 755 0 0\n' "$KOUT/rootfs-extra/fbtouch"
 	printf 'file /usr/bin/swddump %s 755 0 0\n' "$HERE/../initramfs/swddump.sh"
 	printf 'file /usr/bin/khrntest %s 755 0 0\n' "$KOUT/vc-khrn/khrntest"
 	printf 'file /usr/bin/vctri %s 755 0 0\n' "$KOUT/vc-khrn/vctri"
