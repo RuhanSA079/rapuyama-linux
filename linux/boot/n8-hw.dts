@@ -75,8 +75,13 @@
 			syna,nosleep-mode = <1>;
 		};
 
+		/* raw x runs top -> bottom along the long side, raw y right -> left
+		 * (touchtest, four corners, phone upright): flip y, then swap, so
+		 * x = left -> right 0..1756, y = top -> bottom 0..3155 in portrait */
 		rmi4-f11@11 {
 			reg = <0x11>;
+			touchscreen-inverted-y;
+			touchscreen-swapped-x-y;
 		};
 	};
 };
