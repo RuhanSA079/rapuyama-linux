@@ -13,6 +13,9 @@ KERN_BIN="${KERN_BIN:?set KERN_BIN=/path/to/kern.bin}"
 export ARCH=arm
 export CROSS_COMPILE=arm-linux-gnu-
 
+# kernel changes not in the submodule's upstream commit (patches/)
+"$HERE/apply-patches.sh"
+
 mkdir -p "$KOUT"
 cp "$HERE/e6.config" "$KOUT/.config"
 arm-linux-gnu-gcc -march=armv6k -marm -static -nostdlib -fno-pie -no-pie \

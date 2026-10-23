@@ -47,6 +47,8 @@ export PATH="$ROOT/tools/bin/cross:$PATH"
 export ARCH=arm CROSS_COMPILE=arm-linux-gnu-
 
 [ -f "$KSRC/Makefile" ] || { echo "no kernel sources: git submodule update --init --depth 1 linux/kernel/linux"; exit 1; }
+# the N8 kernel changes are patches on the upstream submodule
+"$ROOT/linux/kernel/apply-patches.sh"
 [ -f "$BB" ] || { echo "no $BB: https://busybox.net/downloads/binaries/1.31.0-defconfig-multiarch-musl/busybox-armv5l"; exit 1; }
 [ -f "$ROOT/driver/sis/cert.pem" ] || { echo "no driver/sis/cert.pem + key_trad.pem, see driver/DEPLOY.md"; exit 1; }
 

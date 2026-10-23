@@ -1,0 +1,79 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Ruhan van der Berg <35257374+RuhanSA079@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 21:02:33 +0200
+Subject: [PATCH 6/6] watchdog: rapuyama: set the startup mode before the soc
+ reset
+
+rebootdriver.ldd writes the startup mode into bits 20-23 of 0x20040400
+before writing 2 to 0x20033114. Linux only did the reset; on the N8 the
+mode was left at 0 and the phone powered off instead of booting Symbian.
+With 0xe (rebootdriver set-mode 2, a normal restart) it comes back
+(tested with devmem, 23.10.2026). The word is an optional 4th reg, mapped
+without claiming it since other blocks share it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/watchdog/rapuyama_wdt.c | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/drivers/watchdog/rapuyama_wdt.c b/drivers/watchdog/rapuyama_wdt.c
+index 69056817c..3d0d6ed6b 100644
+--- a/drivers/watchdog/rapuyama_wdt.c
++++ b/drivers/watchdog/rapuyama_wdt.c
+@@ -22,6 +22,10 @@
+  * write cmd reg and powered the phone off)
+  *
+  * Restart (optional third reg, rebootdriver.ldd): write 2 to 0x20033114.
++ * Optional fourth reg: the startup mode word 0x20040400 (bits 20-23), set
++ * before the reset like rebootdriver does. Left at 0 the N8 powers off after
++ * the reset instead of booting Symbian; 0xe (Symbian's normal restart) brings
++ * it back (23.10.2026).
+  *
+  * Both run from the moment symbian booted us, so the device is marked as
+  * running and the watchdog core keeps it fed until userspace takes over.
+@@ -67,6 +71,7 @@ struct rapuyama_wdt {
+ 	void __iomem *cbus;
+ 	void __iomem *soc;
+ 	void __iomem *reset;	/* optional */
++	void __iomem *bootmode;	/* optional */
+ 	spinlock_t lock;
+ 	struct delayed_work dump;
+ 	u16 pmic_last[2][32];
+@@ -82,6 +87,8 @@ static inline void rapuyama_wdt_pinged(void) { }
+ 
+ /* rebootdriver.ldd 0x800cd0bc: irqs off, write 2, spin */
+ #define SOC_RESET_VAL	2
++#define BOOTMODE_MASK	GENMASK(23, 20)
++#define BOOTMODE_RESTART	0xe	/* rebootdriver set-mode 2 */
+ 
+ static int rapuyama_cbus_wait(struct rapuyama_wdt *rw)
+ {
+@@ -312,6 +319,9 @@ static int rapuyama_wdt_restart(struct sys_off_data *data)
+ 	struct rapuyama_wdt *rw = data->cb_data;
+ 
+ 	local_irq_disable();
++	if (rw->bootmode)
++		writel((readl(rw->bootmode) & ~BOOTMODE_MASK) |
++		       FIELD_PREP(BOOTMODE_MASK, BOOTMODE_RESTART), rw->bootmode);
+ 	writel(SOC_RESET_VAL, rw->reset);
+ 	for (;;)
+ 		cpu_relax();
+@@ -333,6 +343,7 @@ static const struct watchdog_ops rapuyama_wdt_ops = {
+ static int rapuyama_wdt_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
++	struct resource *res;
+ 	struct rapuyama_wdt *rw;
+ 	int ret;
+ 
+@@ -350,6 +361,10 @@ static int rapuyama_wdt_probe(struct platform_device *pdev)
+ 	rw->reset = devm_platform_ioremap_resource(pdev, 2);
+ 	if (IS_ERR(rw->reset))
+ 		rw->reset = NULL;
++	/* shared word (usb, power use 0x20040400 too): map, don't claim */
++	res = platform_get_resource(pdev, IORESOURCE_MEM, 3);
++	if (res && rw->reset)
++		rw->bootmode = devm_ioremap(dev, res->start, resource_size(res));
+ 
+ 	spin_lock_init(&rw->lock);
+ 

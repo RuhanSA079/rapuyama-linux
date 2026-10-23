@@ -1,0 +1,94 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Ruhan van der Berg <35257374+RuhanSA079@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 20:43:31 +0200
+Subject: [PATCH 5/6] soc: rapuyama: videocore: hold the VC in reset on
+ shutdown and panic
+
+A soc reset restarts the ARM but not the VC, which keeps running the
+firmware Linux booted. On the N8 the phone then powers off instead of
+coming back to Symbian, most likely because Symbian's vcdriver finds no
+boot ROM ("VideoCore boot ROM not responding (stage 1)"). Drive RUN low
+in .shutdown (reboot) and from a panic notifier (panic=N restart).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/soc/rapuyama/videocore.c | 24 ++++++++++++++++++++++++
+ 1 file changed, 24 insertions(+)
+
+diff --git a/drivers/soc/rapuyama/videocore.c b/drivers/soc/rapuyama/videocore.c
+index 09a3483d4..42b1ecdf4 100644
+--- a/drivers/soc/rapuyama/videocore.c
++++ b/drivers/soc/rapuyama/videocore.c
+@@ -40,6 +40,7 @@
+ #include <linux/mutex.h>
+ #include <linux/module.h>
+ #include <linux/of.h>
++#include <linux/panic_notifier.h>
+ #include <linux/platform_device.h>
+ #include <linux/slab.h>
+ #include <linux/uaccess.h>
+@@ -244,6 +245,7 @@ struct vc {
+ 	struct device *dev;
+ 	void __iomem *bus;
+ 	struct gpio_desc *run;
++	struct notifier_block panic_nb;
+ 	struct clk *clk;
+ 
+ 	/* gfx dma (videocore.dma=1): push is then physically contiguous */
+@@ -2667,6 +2669,23 @@ static void vc_push_free(struct vc *vc)
+ 	vc_push_release(vc);
+ }
+ 
++/*
++ * A soc reset (reboot, panic=N) restarts the ARM but not the VC: it keeps
++ * running the firmware Linux booted, Symbian's vcdriver finds no boot ROM
++ * ("VideoCore boot ROM not responding (stage 1)") and the phone powers off
++ * (N8, 23.10.2026). Hold it in reset on the way out, like before the handoff.
++ */
++static void vc_hold_reset(struct vc *vc)
++{
++	gpiod_set_value(vc->run, 0);
++}
++
++static int vc_panic(struct notifier_block *nb, unsigned long event, void *data)
++{
++	vc_hold_reset(container_of(nb, struct vc, panic_nb));
++	return NOTIFY_DONE;
++}
++
+ static int rapuyama_videocore_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+@@ -2768,6 +2787,8 @@ static int rapuyama_videocore_probe(struct platform_device *pdev)
+ 		ret = PTR_ERR(vc->thread);
+ 		goto err_fb;
+ 	}
++	vc->panic_nb.notifier_call = vc_panic;
++	atomic_notifier_chain_register(&panic_notifier_list, &vc->panic_nb);
+ 	ret = drm_dev_register(&vc->drm, 0);
+ 	if (ret)
+ 		goto err_thread;
+@@ -2782,6 +2803,7 @@ static int rapuyama_videocore_probe(struct platform_device *pdev)
+ 	return 0;
+ 
+ err_thread:
++	atomic_notifier_chain_unregister(&panic_notifier_list, &vc->panic_nb);
+ 	kthread_stop(vc->thread);
+ err_fb:
+ 	vc_push_free(vc);
+@@ -2793,6 +2815,7 @@ static void rapuyama_videocore_remove(struct platform_device *pdev)
+ {
+ 	struct vc *vc = platform_get_drvdata(pdev);
+ 
++	atomic_notifier_chain_unregister(&panic_notifier_list, &vc->panic_nb);
+ 	if (vc->misc.this_device)
+ 		misc_deregister(&vc->misc);
+ 	drm_dev_unplug(&vc->drm);
+@@ -2807,6 +2830,7 @@ static void rapuyama_videocore_shutdown(struct platform_device *pdev)
+ 	struct vc *vc = platform_get_drvdata(pdev);
+ 
+ 	drm_atomic_helper_shutdown(&vc->drm);
++	vc_hold_reset(vc);
+ }
+ 
+ static const struct of_device_id rapuyama_videocore_of_match[] = {

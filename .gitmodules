@@ -43,3 +43,4 @@
 	url = git@github.com:fluffleswaffles/linux.git
 	branch = e6
 	shallow = true
+	ignore = dirty

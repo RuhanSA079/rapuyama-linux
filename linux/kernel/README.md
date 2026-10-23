@@ -61,3 +61,6 @@ The former 240-second reset is fixed on E6 hardware with kernel **#196**: `arch/
 
 ## Why the RPi1 base and not multi_v7
 ARM1176 is ARMv6K, NOT v7. `multi_v7_defconfig` produces code with v7 instructions -> undefined instruction on the E6. So strictly a V6 config (bcm2835).
+## Patches on top of the submodule
+
+The submodule stays at the upstream commit. Changes made for the N8 (gpio input levels, rmi4 polling, VideoCore parameters and reset, watchdog startup mode) are in [`patches/`](patches/) and are applied to the kernel tree by [`apply-patches.sh`](apply-patches.sh), which `build-vc.sh` and `tools/build-n8-kit.sh` run before building. Already applied patches are skipped; `apply-patches.sh reset` puts the tree back to the upstream commit. `.gitmodules` sets `ignore = dirty`, so the patched tree doesn't show up in `git status`.
