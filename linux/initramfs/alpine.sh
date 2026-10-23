@@ -5,12 +5,14 @@
 # installed on the pc with the static x86_64 apk (no qemu, no root), then
 # pruned to what the programs really load (tools/prune_rootfs.py), ~26 MB.
 # the result is cached in work/rootfs-alpine, delete it to rebuild
-# usage: alpine.sh <out dir>
+# full = no prune, for the sd card rootfs (tools/sdroot.sh), apk db stays whole
+# usage: alpine.sh <out dir> [full]
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 TOP="$HERE/../.."
-OUT="${1:?usage: alpine.sh <out dir>}"
+OUT="${1:?usage: alpine.sh <out dir> [full]}"
+FULL="${2:-}"
 DL="$TOP/work/dl/alpine"
 APK="$DL/apkt/sbin/apk.static"
 MIRROR=https://dl-cdn.alpinelinux.org/alpine
@@ -62,15 +64,15 @@ for i in 1 2 3 4 5 6; do
 done
 [ -n "$ok" ] || { tail "$DL/apk.log"; exit 1; }
 
-python3 "$TOP/tools/prune_rootfs.py" "$OUT" $ROOTS
+[ -n "$FULL" ] || python3 "$TOP/tools/prune_rootfs.py" "$OUT" $ROOTS
 # fonts flat in /usr/share/fonts: fontconfig only enters a subdir when
 # readdir reports it as one, which qemu-user (tools/weston_qemu.sh) doesn't
 mv "$OUT"/usr/share/fonts/*/*.ttf "$OUT/usr/share/fonts/"
 find "$OUT/usr/share/fonts" -mindepth 1 -type d -empty -delete
 # foot pulls all of ncurses-terminfo (~7 mb), keep the few we use
-find "$OUT/usr/share/terminfo" -type f ! -name foot ! -name foot-direct \
+[ -n "$FULL" ] || find "$OUT/usr/share/terminfo" -type f ! -name foot ! -name foot-direct \
 	! -name xterm-256color ! -name linux ! -name vt100 -delete 2>/dev/null || true
-find "$OUT/usr/share/terminfo" -xtype l -delete 2>/dev/null || true
-find "$OUT/usr/share/terminfo" -mindepth 1 -type d -empty -delete 2>/dev/null || true
+[ -n "$FULL" ] || find "$OUT/usr/share/terminfo" -xtype l -delete 2>/dev/null || true
+[ -n "$FULL" ] || find "$OUT/usr/share/terminfo" -mindepth 1 -type d -empty -delete 2>/dev/null || true
 touch "$OUT.done"
 du -sh "$OUT"

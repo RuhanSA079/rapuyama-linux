@@ -1,8 +1,12 @@
 /* e6-vc.dts + gfx dma + RGB565: the daily config */
 /include/ "e6-vc.dts"
 
+&i2c3 {
+	status = "okay";
+};
+
 / {
 	chosen {
-		bootargs = "earlycon=ramcon,0x1f000000 keep_bootcon console=tty0 panic=10 nohlt clk_ignore_unused pd_ignore_unused cma=0 e6.usbsh e6.fbtest videocore.dma=1 videocore.rgb565=1";
+		bootargs = "earlycon=ramcon,0x1f000000 keep_bootcon console=tty0 panic=10 nohlt clk_ignore_unused pd_ignore_unused cma=0 e6.usbsh videocore.dma=1 videocore.rgb565=1 e6.swd=1 e6.root=/dev/mmcblk0p2 e6.lowmem=1";
 	};
 };

@@ -218,6 +218,41 @@
 			reg = <0x20030700 0x40>, <0x200336c4 0x4>, <0x20033114 0x4>;
 		};
 
+		/* isasw hs i2c port 3, 32 bit registers and explicit clock/pad setup */
+		i2c3: i2c@20032500 {
+			compatible = "nokia,rapuyama-hs-i2c";
+			reg = <0x20032500 0x80>, <0x20033000 0x100>,
+			      <0x20031a00 0x40>, <0x2003264c 0x4>;
+			clocks = <&cgc 0x13>;
+			clock-names = "ick";
+			clock-frequency = <100000>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
+
+			charger: charger@6b {
+				compatible = "ti,bq24153";
+				reg = <0x6b>;
+				monitored-battery = <&battery>;
+				ti,usb-charger-detection = <&usb_supply>;
+				ti,current-limit = <500>;
+				ti,weak-battery-voltage = <3400>;
+				ti,battery-regulation-voltage = <4100>;
+				ti,charge-current = <550>;
+				ti,termination-current = <100>;
+				ti,resistor-sense = <68>;
+			};
+		};
+
+		/* battery from the gazoo adc behind the cbus above (rapuyama-battery.c) */
+		battery: battery {
+			compatible = "nokia,rapuyama-battery";
+			nokia,charger = <&charger>;
+
+			usb_supply: usb {
+			};
+		};
+
 		/* modem (CMT) link. drives the EM "awake" keepalive that stops the
 		 * random 50-210 s warm reset (rapuyama_modem.c). regs, in order:
 		 *   0 modem control region (swirq 0x280/4/8 + per-channel resets)
@@ -241,7 +276,7 @@
 			interrupts = <150>;
 			clocks = <&cgc 0x11>;
 			clock-names = "fck";
-			clock-frequency = <100000>;
+			clock-frequency = <100000>;	/* 400 kHz: keypad and touch stop answering (22.10.2026) */
 			#address-cells = <1>;
 			#size-cells = <0>;
 

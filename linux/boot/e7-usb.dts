@@ -1,0 +1,7 @@
+/* first boot on the nokia e7, same as the n8 one */
+/include/ "n8-usb.dts"
+
+/ {
+	compatible = "nokia,e7", "nokia,rapuyama";
+	model = "Nokia E7-00 (RapuYama)";
+};

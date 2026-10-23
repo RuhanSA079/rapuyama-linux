@@ -13,9 +13,9 @@
 	 * polled through the bus status instead */
 	videocore@20025800 {
 		compatible = "nokia,rapuyama-videocore";
-		/* ViSSI bus, gfx dma, the pll and the gfx clock divider */
+		/* ViSSI bus, gfx dma, the pll, gfx clock divider and shared pad mux */
 		reg = <0x20025800 0x100>, <0x20024800 0x300>,
-		      <0x20032664 0x4>, <0x20033038 0x4>;
+		      <0x20032664 0x4>, <0x20033038 0x4>, <0x200318e0 0x24>;
 		clocks = <&cgc 0x18>;
 		run-gpios = <&gpio 92 0>;
 	};

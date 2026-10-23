@@ -8,7 +8,7 @@ The SoC and PMIC watchdogs were already being fed; the missing third watchdog wa
 
 ## Use the confirmed fix
 
-- Build the kernel with `build-vc.sh` (below), copy `Image` and the RGB565 DTB `e6-vc-565.dtb` to the phone as `E:\Image` and `E:\e6.dtb`, then boot with the **e6calb** loader. Kernel #196 was validated this way.
+- Build the kernel with `build-vc.sh` (below), copy `Image` and the RGB565 DTB `e6-vc-565.dtb` to the phone as `E:\Image` and `E:\e6.dtb`, then boot with the **e6bfix** loader. Kernel #196 was validated with e6calb; e6bfix works as well (22.10.2026): Symbian services PA_SWD every ~210 s with a 240 s timeout, so at the handoff at least ~30 s are left, and Linux sends its first call ~5 s after the bridge is up. No phase wait needed.
 - The DTB must have **`e6.swd=1`** in `/chosen/bootargs`. The bridge is disabled by default, and the checked-in `e6-vc-565.dts` does not set it yet: add it before building.
 - Check `dmesg | grep rapuyama-swd`: initialization must reach `PA_SWD 0x1f ready`, followed by repeated `stage 60 transport 1 result 1 timeout 240 token 240`. A failed call logs the failure and stops further attempts.
 - The implementation depends on the preserved ISAH handoff, firmware mappings and signed modules from this E6 firmware. It checks the device and firmware signatures. Other firmware versions and other RapuYama devices need separate validation.

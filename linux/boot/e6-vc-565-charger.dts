@@ -1,0 +1,2 @@
+/* compatibility alias: the daily build now tests charger and gfx together */
+/include/ "e6-vc-565.dts"

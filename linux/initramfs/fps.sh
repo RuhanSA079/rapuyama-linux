@@ -8,20 +8,25 @@
 MODE=full
 [ "$1" = line ] && { MODE=line; shift; }
 T=${1:-12}
-now() { cut -d. -f1 /proc/uptime; }
+# read uptime in this shell: no process creation in the redraw loop
+clock_read() {
+	read -r clock_uptime clock_idle < /proc/uptime || return 1
+	clock_seconds=${clock_uptime%%.*}
+}
 
 echo "fps: $MODE test for $T s, then the driver stats"
 sleep 1
-end=$(($(now) + T))
+clock_read || exit 1
+end=$((clock_seconds + T))
 i=0
 if [ "$MODE" = line ]; then
-	while [ "$(now)" -lt "$end" ]; do
+	while clock_read && [ "$clock_seconds" -lt "$end" ]; do
 		i=$((i + 1))
 		printf '\r  counter %d  ' "$i"
 	done
 	echo
 else
-	while [ "$(now)" -lt "$end" ]; do
+	while clock_read && [ "$clock_seconds" -lt "$end" ]; do
 		i=$((i + 1))
 		echo "$i the quick brown fox jumps over the lazy dog 0123456789 $i"
 	done
@@ -40,6 +45,6 @@ dmesg | grep "frames in 10 s" | tail -3 | while read -r l; do
 	mode=${l#*(}
 	mode=${mode%%)*}
 	if [ -n "$us" ] && [ "$us" -gt 0 ] 2>/dev/null; then
-		echo "  $mode: $n frames in 10 s = $((n / 10)).$((n % 10)) fps, $rows rows/frame, push $((us / 1000)) ms -> max $((1000000 / us)) fps"
+		echo "  $mode: $n frames in 10 s = $((n / 10)).$((n % 10)) fps, $rows rows/frame, push $((us / 1000)) ms; push-only ceiling $((1000000 / us)) fps (not measured FPS)"
 	fi
 done

@@ -24,7 +24,7 @@ The former 240-second reset is **fixed on the Nokia E6**: Linux now services the
 | 18.10.2026 | Hardware keypad: TC3589x on I2C, own polled driver + E6 xkb layout |
 | 19.10.2026 | First frame rendered by the VideoCore GL server, then GLES 2 from userspace through `libvcgl` + `/dev/vc-khrn` ([notes](docs/videocore-display.md#drawing-on-the-videocore-works-since-19102026)) |
 | 19.10.2026 | Touchscreen: Atmel maXTouch on I2C, multitouch |
-| 22.10.2026 | SD card and internal eMMC enumerate under Linux (read-only use for now, [notes](docs/driver-re.md#sd--mmc-epbusmvdll)) |
+| 22.10.2026 | SD card and internal eMMC work under Linux, btrfs rootfs on the card ([notes](docs/driver-re.md#sd--mmc-epbusmvdll)) |
 | 22.10.2026 | 240-second reset fixed: PA_SWD secure watchdog serviced from Linux, four successful calls through 648 s ([log](docs/secure-watchdog_SUCCESS.txt)) |
 
 ## The hardware
@@ -97,7 +97,7 @@ Symbian
             |_ early log is captured in reserved RAM
 ```
 
-The kernel runs in place where it was loaded: `ARM_PATCH_PHYS_VIRT` makes the block `PHYS_OFFSET`, Linux drops the RAM below it. `e6calb.sis` is the same loader, it also times the handoff right after a Symbian PA_SWD service and is the one to use with `e6.swd=1`. The older `e6boot.sis` (zImage, fixed decompression address) still exists but big kernels die at random boots with it.
+The kernel runs in place where it was loaded; with `e6.lowmem=1` the RAM below it is used too ([details](linux/boot/README.md#ram-below-the-kernel-22102026)). Use `e6bfix.sis`: `e6calb.sis` (the same loader plus a wait for Symbian's PA_SWD phase, up to ~3.5 min) is not needed any more and makes Linux slower, because Symbian drops its clock / performance level while it waits and Linux keeps that. The older `e6boot.sis` (zImage, fixed decompression address) still exists but big kernels die at random boots with it.
 
 The phone-side package and boot sequence are documented in [`linux/boot/README.md`](linux/boot/README.md). That guide includes the expected files, recovery/diagnostic notes, and the distinction between normal and probe images. Do not mistake a diagnostic probe image for the regular kernel.
 
@@ -117,7 +117,7 @@ The shell runs on the phone's `ttyGS0`. `picocom` provides the host-side termina
 KERN_BIN=/path/to/kern.bin linux/kernel/build-vc.sh
 ```
 
-Daily set: `linux/kernel/build-vc/arch/arm/boot/Image` + `linux/kernel/build-vc/e6-vc-565.dtb` (gfx DMA + RGB565) as `E:\Image` / `E:\e6.dtb`, booted with `e6bfix.sis` or `e6calb.sis`. The script also builds `e6-vc.dtb` (XRGB8888), `e6-vc-khrn.dtb` and `e6-vc-gl.dtb` (VideoCore GL checks). Add `e6.swd=1` to the bootargs for runs longer than 240 seconds. Driver parameters, weston, GLES 2, the bring-up sequence and known issues are in [`docs/videocore-display.md`](docs/videocore-display.md).
+Daily set: `linux/kernel/build-vc/arch/arm/boot/Image` + `linux/kernel/build-vc/e6-vc-565.dtb` (gfx DMA + RGB565) as `E:\Image` / `E:\e6.dtb`, booted with `e6bfix.sis`. The script also builds `e6-vc.dtb` (XRGB8888), `e6-vc-khrn.dtb` and `e6-vc-gl.dtb` (VideoCore GL checks). Driver parameters, weston, GLES 2, the bring-up sequence and known issues are in [`docs/videocore-display.md`](docs/videocore-display.md).
 
 GLES 2 userspace (`libvcgl`, `khrntest`, `vctri`) is built by `linux/vc-khrn/build.sh` against the alpine sysroot from `linux/initramfs/sysroot.sh`.
 
@@ -150,8 +150,9 @@ GLES 2 userspace (`libvcgl`, `khrntest`, `vctri`) is built by `linux/vc-khrn/bui
 
 - This is an early userspace bring-up, not yet a complete everyday phone OS.
 - Pushing pixels is slow: the ViSSI bus does ~7 MB/s, so weston (pixman) gets ~9-16 fps in RGB565 and the VideoCore ignores partial write rects. Fast UI has to be rendered on the VideoCore (GLES 2). `libvcgl` has one config (RGB565, no depth/stencil), one buffer per window and no VC-to-host bulk transfers yet (no glReadPixels, info logs). Blanking/backlight control are not implemented. The display comes up a few seconds into boot, so use the USB shell or the RAM log for early messages.
-- Storage is read-only for now: the SD card retry fix is not validated on hardware, and the internal eMMC is Symbian's `E:` drive - never write to it.
-- The PA_SWD bridge is opt-in (`e6.swd=1`) and validated only with the E6 firmware context and the e6calb loader. Modem, radio, audio and power key are not supported.
+- Storage: the SD card and the internal eMMC work. The card can hold a btrfs rootfs (`tools/sdroot.sh`, `e6.root=`, see [the boot guide](linux/boot/README.md#root-filesystem-on-the-sd-card-22102026)), with zram + a swapfile. The internal eMMC is Symbian's `E:` drive - never write to it.
+- RAM: Linux gets ~175 MB of the 256 MB (`e6.lowmem=1`, the rest is Symbian's kernel, the modem and reserved areas), see [the boot guide](linux/boot/README.md#ram-below-the-kernel-22102026).
+- The PA_SWD bridge is opt-in (`e6.swd=1`) and validated only with the E6 firmware context (e6bfix / e6calb loaders). Modem, radio, audio and power key are not supported.
 - Treat register addresses and undocumented peripheral behavior as hypotheses unless the notes explicitly say they were checked on live hardware.
 - A successful boot does not imply that every peripheral or power-management path is implemented.
 - The boot handoff is one-way. A failed run may require the phone's watchdog reset to recover.

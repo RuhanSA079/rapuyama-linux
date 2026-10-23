@@ -26,11 +26,20 @@ The kernel is built with fixed `PHYS_OFFSET=0x10000000` and
 - build: `RB_DEFS=-DRB_IMAGE_BOOT ./build_app.sh e6bfix boot_app.cpp 0xe1000024` in `../stage0/symbian-loader`
 - copy `Image` to `E:\Image` and the DTB to `E:\e6.dtb`, run the e6bfix icon
 
+## RAM below the kernel (22.10.2026)
+
+Booting in place costs RAM: the block Symbian hands out sits high (`0x19a00000`..`0x1a000000`) and ARM Linux can't use RAM below `PHYS_OFFSET`, so only ~100 MB of the 256 MB were left. The rapuyama kernel now has `TEXT_OFFSET = 0x08a08000`: `PHYS_OFFSET` = block - `0x8a00000` lies under the RAM start, so `0x11600000` up to the kernel is lowmem again (`arch/arm/mach-rapuyama/lowmem.c`).
+- with `e6.lowmem=1` (in the daily `e6-vc-565.dtb`) Linux gets that RAM back. Every page Symbian's kernel L1 maps (the ISAH copy the PA_SWD bridge runs on + the live TTBR1 table) and the L2 tables stay reserved, ~6 MB below the kernel and ~4.5 MB above. On the phone: 174 MB available instead of 70 MB (31 MB below the kernel kept for Symbian), PA_SWD calls unchanged
+- `e6.lowmem=0` (the kernel default) drops it like before; `e6.lowwatch=1` then checksums every page of it Symbian doesn't map, every 30 s for 10 min, and logs `rapuyama: lowwatch pass N: ... changed`. Anything listed there = something (modem DMA?) still writes into that RAM, it must be reserved before `e6.lowmem=1` is safe. 15 passes on the phone (22.10.2026): nothing changed
+- kernel side: `head.S` maps only the kernel's own sections (not everything from `PHYS_OFFSET`), `ARCH_PFN_OFFSET` follows the RAM start, `map_lowmem` keeps going after the bank that holds the kernel
+- the gfx DMA push buffer and the VCHI tx slot sit right after the kernel in the booter's block (`dmesg | grep "gfx dma:"`). The idea was that the DMA can't read high RAM; it still timed out with the tx slot at `0x1b5bc000`, so that was not the cause (see `docs/videocore-display.md`)
+- the zImage path (`e6boot.sis`) does not work with this `TEXT_OFFSET`, use e6bfix
+
 ## Prevent the former 240-second reset (confirmed 22.10.2026)
 
 The E6 also has a secure PA_SWD watchdog beyond the SoC and PMIC watchdogs. The Linux bridge must be enabled with **`e6.swd=1`** in `/chosen/bootargs`; it is disabled by default. Kernel #196 serviced it successfully four times through 648 seconds, with the USB shell still running.
 
-Build with `build-vc.sh`, add `e6.swd=1` to the bootargs of `e6-vc-565.dts`, copy `Image` and the DTB to `E:\Image` and `E:\e6.dtb` and boot using the **e6calb** loader. The bridge requires the preserved E6 firmware context and ISAH handoff; older loaders and other firmware versions are not covered by this validation.
+Build with `build-vc.sh` (`e6-vc-565.dts` already has `e6.swd=1`), copy `Image` and the DTB to `E:\Image` and `E:\e6.dtb` and boot using the **e6bfix** loader. e6calb works too but waits up to ~3.5 min for Symbian's phase, which is not needed and leaves the clocks at Symbian's idle level (PIO pushes 250 ms per frame instead of 97 ms). The bridge requires the preserved E6 firmware context and ISAH handoff; older loaders and other firmware versions are not covered by this validation.
 
 Check `dmesg | grep rapuyama-swd` for repeated `stage 60 transport 1 result 1 timeout 240 token 240`. See the [reset report](../../docs/modem-reset-findings.md#use-the-confirmed-fix) for the full build command, firmware path and [original console evidence](../../docs/secure-watchdog_SUCCESS.txt).
 
@@ -63,9 +72,21 @@ The base `e6.dtb` selects a non-interactive init path that logs a sign of life a
 1. Build with `KERN_BIN=/path/to/kern.bin ../kernel/build-vc.sh`.
 2. Copy `linux/kernel/build-vc/arch/arm/boot/Image` to the phone as `E:\Image`.
 3. Copy `linux/kernel/build-vc/e6-vc-565.dtb` (daily: gfx DMA + RGB565) to the phone as `E:\e6.dtb`. `e6-vc.dtb` = XRGB8888, `e6-vc-khrn.dtb` / `e6-vc-gl.dtb` = VideoCore GL checks.
-4. Boot with `e6bfix.sis`, or `e6calb.sis` with `e6.swd=1` for long runs (see above). The USB shell keeps working.
+4. Boot with `e6bfix.sis` (not e6calb, see above). The USB shell keeps working.
 
 About 2 seconds after the handoff, the driver reboots the VideoCore. The Symbian picture goes away and the backlight comes on, then the console shows up. weston + foot run from the initramfs, keypad and touchscreen work under it. Check with `dmesg | grep -i videocore`. Driver parameters (`videocore.dma=`, `videocore.rgb565=`, `videocore.cold=`, `videocore.debug=` ...), weston and GLES 2 (`libvcgl`, `/dev/vc-khrn`) are described in [`../../docs/videocore-display.md`](../../docs/videocore-display.md).
+
+## Root filesystem on the SD card (22.10.2026)
+
+The microSD card gets two partitions: p1 FAT32 (2 GiB, label `E6CARD`) for Symbian, p2 btrfs (label `e6root`) as the Linux rootfs. Symbian must be able to mount p1: a card it can't mount (it asks for a decryption key) gets its power cut, and Linux only finds the card when Symbian left it powered. It holds the same userspace as the initramfs (alpine + weston + `libvcgl` + VideoCore firmware), but unpruned and persistent. The initramfs stays the fallback.
+
+1. Build the kernel with `build-vc.sh` (the card is filled from its `build-vc/initramfs.list`).
+2. Put the card into a reader on the pc and run `tools/sdroot.sh /dev/sdX` (whole card, not a partition). It **erases the card**, asks you to type the device name first, needs `sudo`, `sfdisk`, `mkfs.vfat` and `mkfs.btrfs`. `tools/sdroot.sh <dir>` fills an already mounted filesystem instead.
+3. Boot with `e6-vc-565.dtb`, it has `e6.root=/dev/mmcblk0p2` (and `e6.swd=1`).
+
+`init.sh` waits up to 10 s for the device, mounts it as btrfs (`noatime`), moves `/dev /proc /sys /tmp` over and `switch_root`s to the card's `/init`. No card, a different filesystem or no `/init` = it logs why and stays in the initramfs. Only btrfs is mounted, so the internal eMMC (Symbian `E:`) is never touched even if the `mmcblk` numbers swap. Check with `dmesg | grep e6:` for `switching to the rootfs on /dev/mmcblk0p2` and `on the sd rootfs`. Works on the phone (22.10.2026).
+
+Swap: `init.sh` always sets up 128 MB of compressed zram (lzo-rle, priority 100) and, on the card, `/swapfile` (1 GiB, priority 10, created by `sdroot.sh` as a nocow file). `dmesg | grep "e6: swap"` lists both. To add the swapfile to an existing card, mount p2 on the pc and run `tools/sdroot.sh <mount point>`. Do the same after every kernel build: the card has its own copy of `/init`, `weston.ini`, `libvcgl` and the VideoCore firmware, the ones in the new initramfs are not used once the card is the rootfs.
 
 ## Framebuffer-preserving kernel experiment (superseded)
 
@@ -103,4 +124,4 @@ power-off confirms that an IRQ reached the vector; no power-off is inconclusive 
 The successful boot log is preserved at
 [`../../docs/first-boot_SUCCESS.log`](../../docs/first-boot_SUCCESS.log). It shows the timer interrupt being handled, the `rapuyama-fc` clocksource becoming active, and BusyBox `/init` starting. The USB gadget shell is an additional working path confirmed on the phone.
 
-The display works with the `build-vc.sh` kernel and `e6-vc-565.dtb` (see "Boot with the display" above): weston, GLES 2 from userspace, keypad and touchscreen are confirmed on the phone. The display comes up a few seconds into boot, so early boot problems still need the USB shell or the RAM log. The SD card and internal eMMC enumerate (read-only use, never write the eMMC = Symbian `E:`). The 240-second reset is fixed with `e6.swd=1` + e6calb. Radio, audio, power key and power management are not done; see [`../../docs/driver-re.md`](../../docs/driver-re.md) and [`../../docs/videocore-display.md`](../../docs/videocore-display.md) for the current driver findings.
+The display works with the `build-vc.sh` kernel and `e6-vc-565.dtb` (see "Boot with the display" above): weston, GLES 2 from userspace, keypad and touchscreen are confirmed on the phone. The display comes up a few seconds into boot, so early boot problems still need the USB shell or the RAM log. The SD card and internal eMMC work, the card can be the rootfs (see above), never write the eMMC = Symbian `E:`. The 240-second reset is fixed with `e6.swd=1`. Radio, audio, power key and power management are not done; see [`../../docs/driver-re.md`](../../docs/driver-re.md) and [`../../docs/videocore-display.md`](../../docs/videocore-display.md) for the current driver findings.

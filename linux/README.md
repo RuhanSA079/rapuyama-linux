@@ -3,7 +3,7 @@
 
 This directory contains the Linux kernel, board description, boot trampoline and Symbian-side loader for the Nokia E6 (RapuYama, ARM1176JZF-S / ARMv6K).
 
-**Current milestone: no more 240-second reset (22.10.2026).** The `rapuyama-swd` bridge services the secure PA_SWD watchdog (`e6.swd=1`, boot with e6calb), the phone ran 648 s with four successful calls (`../docs/modem-reset-findings.md`). The SD card and internal eMMC enumerate on the two MMC controllers.
+**Current milestone: no more 240-second reset (22.10.2026).** The `rapuyama-swd` bridge services the secure PA_SWD watchdog (`e6.swd=1`, boot with e6bfix), the phone ran 648 s with four successful calls (`../docs/modem-reset-findings.md`). The SD card and internal eMMC enumerate on the two MMC controllers.
 
 **Wayland and GLES 2 (18-19.10.2026).** The VideoCore driver is a small KMS device: weston + foot run on the phone, with the TC3589x keypad and the maXTouch touchscreen. GLES 2 from userspace is rendered by the VideoCore's own GL server through `vc-khrn/libvcgl.so` and `/dev/vc-khrn` (details: `../docs/videocore-display.md`). The kernel is booted in place by the `e6bfix` / `e6calb` loader (`boot/README.md`).
 

@@ -10,13 +10,18 @@
 # unlike a power off it keeps the ram, so ramread.sis can pull the whole log
 /bin/busybox --install -s /bin
 /bin/busybox --install -s /sbin
-mkdir -p /proc /sys /dev /tmp /root
-mount -t proc proc /proc
-mount -t sysfs sys /sys
-mount -t devtmpfs dev /dev 2>/dev/null
-mkdir -p /dev/pts
-mount -t devpts devpts /dev/pts
-mount -t tmpfs tmp /tmp
+mkdir -p /proc /sys /dev /tmp /root /run
+# on the sd rootfs these came over from the initramfs already
+if [ -z "$E6_ROOT" ]; then
+	mount -t proc proc /proc
+	mount -t sysfs sys /sys
+	mount -t devtmpfs dev /dev 2>/dev/null
+	mkdir -p /dev/pts
+	mount -t devpts devpts /dev/pts
+	mount -t tmpfs tmp /tmp
+fi
+# /run lives on the card there, a stale seatd.sock would keep seatd from starting
+mount -t tmpfs run /run
 
 export PATH=/bin:/sbin:/usr/bin:/usr/sbin HOME=/root TERM=vt100 PS1='e6:\w# '
 # busybox line editing only does utf-8 (cyrillic in weston-terminal) with this
@@ -28,7 +33,48 @@ log() { echo "e6: $*" > /dev/kmsg; }
 # the "alive" heartbeat is written by the kernel straight into ramcon now
 # (mach-rapuyama, every 10 s), so it no longer floods the console
 
-log "init.sh v7 (usb shell + weston, tty1 shell as fallback)"
+log "init.sh v8 (usb shell + weston, tty1 shell as fallback)${E6_ROOT:+, on the sd rootfs}"
+
+# keep the diagnostic command across switch_root without modifying the card
+if [ -r /etc/e6-check.sh ] && [ -z "$E6_ROOT" ]; then
+	cp /etc/e6-check.sh /tmp/e6-check
+fi
+
+# e6.root=<dev> = btrfs rootfs on the sd card (tools/sdroot.sh). anything
+# wrong with it = stay in the initramfs. -t btrfs: the emmc (symbian E:) is
+# never btrfs, so a swapped mmcblk number can't mount it
+root=$(sed -n 's/.*e6\.root=\([^ ]*\).*/\1/p' /proc/cmdline)
+if [ -n "$root" ] && [ -z "$E6_ROOT" ]; then
+	n=0
+	while [ ! -b "$root" ] && [ "$n" -lt 10 ]; do
+		n=$((n + 1))
+		sleep 1
+	done
+	mkdir -p /newroot
+	if mount -t btrfs -o noatime "$root" /newroot 2>/dev/kmsg; then
+		if [ -x /newroot/init ]; then
+			log "switching to the rootfs on $root"
+			for d in dev proc sys tmp; do
+				mkdir -p "/newroot/$d"
+				mount -o move "/$d" "/newroot/$d"
+			done
+			umount /run
+			export E6_ROOT=1
+			exec switch_root /newroot /init
+		fi
+		log "no /init on $root"
+		umount /newroot
+	fi
+	log "no rootfs on $root, staying in the initramfs"
+fi
+
+# swap: compressed zram first (the card is slow), then /swapfile on the card
+if [ -e /sys/block/zram0 ]; then
+	echo 128M > /sys/block/zram0/disksize
+	mkswap /dev/zram0 > /dev/null && swapon -p 100 /dev/zram0
+fi
+[ -f /swapfile ] && swapon -p 10 /swapfile 2>/dev/kmsg
+log "swap: $(grep -v ^Filename /proc/swaps | awk '{printf "%s %s kB, ", $1, $3}')"
 
 # reboot / poweroff / halt typed in the shell: busybox signals pid 1 (TERM =
 # reboot, USR2 = poweroff, USR1 = halt), and pid 1 is this script. stop

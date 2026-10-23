@@ -1,0 +1,7 @@
+/* e7 display test, same as the n8 one (the e7 panel is 360x640 too) */
+/include/ "n8-vc.dts"
+
+/ {
+	compatible = "nokia,e7", "nokia,rapuyama";
+	model = "Nokia E7-00 (RapuYama)";
+};

@@ -5,7 +5,8 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 KSRC="$HERE/linux"
-KOUT="$HERE/build-vc"
+# KOUT=... builds elsewhere, so two builds never share a directory
+KOUT="${KOUT:-$HERE/build-vc}"
 # the E6 rom dump, the VideoCore images get pulled out of it
 KERN_BIN="${KERN_BIN:?set KERN_BIN=/path/to/kern.bin}"
 
@@ -46,6 +47,7 @@ cp "$HERE/../initramfs/initramfs.list" "$KOUT/initramfs.list"
 	printf 'file /usr/share/X11/xkb/symbols/e6 %s 644 0 0\n' "$HERE/../initramfs/xkb-e6"
 	printf 'file /usr/bin/e6-term %s 755 0 0\n' "$HERE/../initramfs/e6-term.sh"
 	printf 'file /usr/bin/fps %s 755 0 0\n' "$HERE/../initramfs/fps.sh"
+	printf 'file /etc/e6-check.sh %s 755 0 0\n' "$HERE/../initramfs/e6-check.sh"
 	printf 'file /etc/fonts/local.conf %s 644 0 0\n' "$HERE/../initramfs/fonts-local.conf"
 	for f in vc-loader-a vc-loader-b vc-main; do
 		printf 'file /lib/firmware/vc/%s.bin %s 644 0 0\n' "$f" "$KOUT/vcfw/$f.bin"
@@ -70,7 +72,7 @@ make -C "$KSRC" O="$KOUT" olddefconfig
 make -C "$KSRC" O="$KOUT" -j"$(nproc)" zImage
 make -C "$KSRC" O="$KOUT" scripts_dtc
 
-for v in vc vc-565 vc-khrn vc-gl; do
+for v in vc vc-565 vc-565-charger vc-khrn vc-gl; do
 	"$KOUT/scripts/dtc/dtc" -I dts -O dtb -i "$HERE/../boot" \
 		-o "$KOUT/e6-$v.dtb" "$HERE/../boot/e6-$v.dts"
 done
