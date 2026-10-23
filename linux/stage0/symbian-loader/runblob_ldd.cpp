@@ -557,6 +557,13 @@ TInt DRunBlobChan::Request(TInt aFunction, TAny* a1, TAny* a2){
 			for(TInt i=0; i<nheld; ++i){Epoc::FreePhysicalRam(held[i], (TInt)heldsz[i]);}
 		}
 		if(r!=KErrNone){
+			// nothing of 32 mb+ anywhere: find the biggest block at all (1 mb steps)
+			for(TUint32 sz=0x1f00000u; !bestsz && sz>=0x100000u; sz-=0x100000u){
+				TPhysAddr p=0;
+				if(Epoc::AllocPhysicalRam((TInt)sz, p, 20)!=KErrNone){continue;}
+				bestsz=sz; bestp=p;
+				Epoc::FreePhysicalRam(p, (TInt)sz);
+			}
 			TUint32 out=(TUint32)bestp|(bestsz>>20);
 			Kern::ThreadRawWrite(&Kern::CurrentThread(), a2, &out, 4);
 			return KErrNoMemory;

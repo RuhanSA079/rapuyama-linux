@@ -9,6 +9,7 @@
 // boot visibly, its just the loader ready for when the adapter shows up
 #include <e32std.h>
 #include <f32file.h>
+#include <e32hal.h>
 #include "runblob.h"
 
 _LIT(KLog, "E:\\boot.log");
@@ -178,6 +179,13 @@ GLDEF_C TInt E32Main(){
 	if(gFs.Connect()!=KErrNone){return KErrGeneral;}
 	if(gLog.Replace(gFs, KLog, EFileWrite)!=KErrNone){gFs.Close(); return KErrGeneral;}
 	L(_L8("boot: started\n"));
+	L(_L8("boot: alloc v2\n"));
+	{
+		TMemoryInfoV1Buf mi;
+		if(UserHal::MemoryInfo(mi)==KErrNone){
+			Lf(_L8("ram total=%dk free=%dk\n"), mi().iTotalRamInBytes>>10, mi().iFreeRamInBytes>>10);
+		}
+	}
 
 	User::FreeLogicalDevice(KRunBlobName);
 	TInt rLoad=User::LoadLogicalDevice(KRunBlobLdd);
@@ -200,7 +208,7 @@ GLDEF_C TInt E32Main(){
 		TBuf<48> m;
 		// on -4 phys = biggest block symbian gave | its size in mb (0 = none)
 		if(r==KErrNoMemory && phys){
-			m.Format(_L("no ram: best %dmb@%08x"), phys&0xff, phys&~0xfffu);
+			m.Format(_L("no ram: best %dmb@%08x"), phys&0xff, phys&~0xfffffu);
 		}else{
 			m.Format(_L("no free ram block (%d)"), r);
 		}
