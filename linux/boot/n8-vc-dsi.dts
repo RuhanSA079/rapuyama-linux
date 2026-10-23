@@ -1,0 +1,13 @@
+/* n8-vc-lb.dts (loader B, 30 s start delay) talking to display chipset
+ * interface 6 instead of the E6's 4. with 4 the VC boots and pushes frames
+ * but every panel read (status 0a..0e, id da..dc) is 00 on the n8
+ * (23.10.2026): its 360x640 panel is on DSI, 6 is the other interface in
+ * the chipset table. the panel setup is still the E6 one (640x480), the
+ * point is whether the panel id / status reads answer */
+/include/ "n8-vc-lb.dts"
+
+/ {
+	chosen {
+		bootargs = "earlycon=ramcon,0x1f000000 keep_bootcon console=tty0 panic=10 nohlt clk_ignore_unused pd_ignore_unused cma=0 e6.usbsh videocore.debug=1 videocore.loader_b=1 videocore.start_delay=30 videocore.dspc_id=6";
+	};
+};

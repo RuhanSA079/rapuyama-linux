@@ -97,7 +97,7 @@ for v in vc vc-565 vc-565-charger vc-khrn vc-gl; do
 		-o "$KOUT/e6-$v.dtb" "$HERE/../boot/e6-$v.dts"
 done
 # other phones on the same soc (docs/other-phones.md)
-for v in n8-vc n8-vc-lb e7-vc; do
+for v in n8-vc n8-vc-lb n8-vc-dsi e7-vc; do
 	"$KOUT/scripts/dtc/dtc" -I dts -O dtb -i "$HERE/../boot" \
 		-o "$KOUT/$v.dtb" "$HERE/../boot/$v.dts"
 done

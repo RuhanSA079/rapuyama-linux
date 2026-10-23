@@ -5,6 +5,7 @@ State on 23.10.2026, Symbian Anna 024.001, `n8boot` loader, E6 kernel with the N
 | Status | Meaning |
 | --- | --- |
 | ✅ works | seen working on the N8 |
+| ⚠️ differs | works, but not like on the E6 |
 | 🧪 test | built and in the kit, not run on the N8 yet |
 | 🔧 todo | the hardware and the way to it are known, the Linux side is missing |
 | 🔬 research | needs reverse engineering first, the way to it is still open |
@@ -20,7 +21,8 @@ State on 23.10.2026, Symbian Anna 024.001, `n8boot` loader, E6 kernel with the N
 | USB device: serial shell | MUSB + g_serial, `/dev/ttyACM*` on the PC | ✅ works | |
 | SoC + PMIC watchdog | `rapuyama-wdt` | ✅ works | |
 | Secure watchdog (PA_SWD) | modem / secure side | 🔬 research | Linux is reset back to Symbian after 0.5..4 min. The E6 bridge (`e6.swd=1`) uses addresses from the E6 firmware, they have to be found in the N8 ROM |
-| RAM log after a reset | `ramcon` at `0x1f000000`, `e6logs.sis` | ✅ works | |
+| RAM log after a reset | `ramcon` at `0x1f000000`, `e6logs.sis` | ✅ works | Only after a reset: when the phone powers off, the RAM is lost |
+| `reboot` | soc reset `0x20033114` | ⚠️ powers off | On the N8 `reboot` switches the phone off instead of restarting (E6: reboots). Power on with the key |
 | Internal eMMC (`E:`, 16 GB) | `mmcblk1`, Samsung MAG4EM | ✅ reads | Stuck in 1-bit mode (`switch to bus width 4 failed`). One FAT32 filesystem, no partition table. **Never write to it** |
 | microSD | 2nd MMC controller, through the GAZOO level shifter | 🧪 test | No `mmcblk0` seen, probably no card inserted |
 | USB host / OTG | MUSB | 🔧 todo | Only the device side is set up |
@@ -56,8 +58,8 @@ State on 23.10.2026, Symbian Anna 024.001, `n8boot` loader, E6 kernel with the N
 
 | Part | Hardware | Status | Notes |
 | --- | --- | --- | --- |
-| VideoCore boot | BCM2727, firmware from the N8 ROM (`vcdriver.dll`) | 🧪 test | Loader A/B + main image extracted from the ROM dump, RUN gpio 92 and HAT 63 confirmed in `vcdriver.dll`. Kit `out/n8-test2/` |
-| LCD panel | 360x640, MIPI DSI 1 lane, behind the VideoCore | 🔬 research | The E6 driver only knows its 640x480 RGB panel. Needs the N8 panel id (test 2), then the DSI setup + init sequence captured from the N8 ROM with `tools/vcemu` |
+| VideoCore boot | BCM2727, firmware from the N8 ROM (`vcdriver.dll`) | ✅ works | With **loader B** (`videocore.loader_b=1`, `0x802f0a40`): `loader answered 3/1`, `VideoCore booted`, VCHI, dispman and full-frame bulk transfers work. Loader A is refused (`1/1`). Needs `videocore.start_delay=30`: started early in the boot it powered the phone off. `n8-vc-lb.dts` |
+| LCD panel | 360x640, MIPI DSI 1 lane, behind the VideoCore | 🔬 research | Through display chipset interface 4 (the E6's RGB one) every panel read is `00` (status 0a..0e, id). Next: interface 6 (`videocore.dspc_id=6`, `n8-vc-dsi.dts`), then the DSI setup + init sequence captured from the N8 ROM with `tools/vcemu` |
 | Backlight | inside the panel, DCS brightness | 🔬 research | Comes with the panel |
 | GLES 2 (`libvcgl`) | VideoCore GL server | 🔬 research | Works on the E6, follows once the display works |
 | HDMI out | from the VideoCore | 🔬 research | |
