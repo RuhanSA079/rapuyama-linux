@@ -45,7 +45,7 @@ sed -E -e "s#^(file /bin/busybox ).*( 755 0 0)#\1$(realpath "$HERE/../../work/dl
 	"$HERE/../initramfs/initramfs.list" > "$KOUT/initramfs.list"
 
 # input / sensor test tools (linux/initramfs/{keytest,touchtest}.c, sensortest.sh)
-for t in keytest touchtest; do
+for t in keytest touchtest physdump; do
 	arm-linux-gnu-gcc -march=armv6k -marm -static -nostdlib -fno-pie -no-pie \
 		-ffreestanding -fno-builtin -fomit-frame-pointer -fno-stack-protector \
 		-Os -Wall -Wextra -Werror \
@@ -59,6 +59,8 @@ done
 	printf 'file /usr/bin/keytest %s 755 0 0\n' "$KOUT/rootfs-extra/keytest"
 	printf 'file /usr/bin/touchtest %s 755 0 0\n' "$KOUT/rootfs-extra/touchtest"
 	printf 'file /usr/bin/sensortest %s 755 0 0\n' "$HERE/../initramfs/sensortest.sh"
+	printf 'file /usr/bin/physdump %s 755 0 0\n' "$KOUT/rootfs-extra/physdump"
+	printf 'file /usr/bin/swddump %s 755 0 0\n' "$HERE/../initramfs/swddump.sh"
 	printf 'file /usr/bin/khrntest %s 755 0 0\n' "$KOUT/vc-khrn/khrntest"
 	printf 'file /usr/bin/vctri %s 755 0 0\n' "$KOUT/vc-khrn/vctri"
 	printf 'file /usr/lib/libvcgl.so %s 755 0 0\n' "$KOUT/vc-khrn/libvcgl.so"
@@ -95,6 +97,8 @@ done
 	--enable IIO_ST_ACCEL_3AXIS --enable IIO_ST_ACCEL_I2C_3AXIS \
 	--enable AK8974 --enable SENSORS_TSL2563 \
 	--enable RMI4_CORE --enable RMI4_I2C --enable RMI4_2D_SENSOR --enable RMI4_F11
+# DEVMEM_ALL=1: /dev/mem for all of RAM (physdump / swddump, firmware dumps)
+[ "${DEVMEM_ALL:-}" = 1 ] && "$KSRC/scripts/config" --file "$KOUT/.config" --disable STRICT_DEVMEM
 # modem experiments off (drivers/misc/rapuyama_*), they made boots die
 "$KSRC/scripts/config" --file "$KOUT/.config" --disable RAPUYAMA_MODEM
 

@@ -90,7 +90,7 @@ static __attribute__((noreturn)) void exit_with_status(u32 status)
  * ash and exec, so ctrl-c did nothing. a process may set its own back to
  * default (all zero = SIG_DFL, ARM struct sigaction + 8 byte sigset)
  */
-static void default_signals(void)
+static inline void default_signals(void)
 {
 	u32 act[5] = { 0 };
 
@@ -103,14 +103,14 @@ static void default_signals(void)
 static char out_buf[512];
 static u32 out_len;
 
-static void flush(void)
+static inline void flush(void)
 {
 	if (out_len)
 		syscall3(SYS_write, 1, (u32)out_buf, out_len);
 	out_len = 0;
 }
 
-static void putc_(char c)
+static inline void putc_(char c)
 {
 	if (out_len == sizeof(out_buf))
 		flush();
@@ -119,13 +119,13 @@ static void putc_(char c)
 		flush();
 }
 
-static void puts_(const char *s)
+static inline void puts_(const char *s)
 {
 	while (*s)
 		putc_(*s++);
 }
 
-static void putd(s32 v)
+static inline void putd(s32 v)
 {
 	char tmp[12];
 	int n = 0;
@@ -142,7 +142,7 @@ static void putd(s32 v)
 }
 
 /* seconds.milliseconds of an event timestamp */
-static void puttime(u32 sec, u32 usec)
+static inline void puttime(u32 sec, u32 usec)
 {
 	u32 ms = usec / 1000;
 
@@ -206,7 +206,7 @@ struct dev {
 	u8 swbits[4];
 };
 
-static int test_bit(const u8 *bits, u32 bit)
+static inline int test_bit(const u8 *bits, u32 bit)
 {
 	return bits[bit / 8] >> (bit % 8) & 1;
 }
@@ -215,7 +215,7 @@ static int test_bit(const u8 *bits, u32 bit)
  * opens /dev/input/event0..31, fills the capability bits and keeps the ones
  * want() accepts. returns how many were kept
  */
-static int open_devs(struct dev *devs, int (*want)(const struct dev *))
+static inline int open_devs(struct dev *devs, int (*want)(const struct dev *))
 {
 	char path[] = "/dev/input/eventNN";
 	int n = 0;
@@ -249,7 +249,7 @@ static int open_devs(struct dev *devs, int (*want)(const struct dev *))
 	return n;
 }
 
-static void put_dev(const struct dev *d)
+static inline void put_dev(const struct dev *d)
 {
 	puts_("event");
 	putd(d->num);
@@ -259,7 +259,7 @@ static void put_dev(const struct dev *d)
 }
 
 /* waits for any of the devices, returns the index of one with data */
-static int wait_devs(const struct dev *devs, int n)
+static inline int wait_devs(const struct dev *devs, int n)
 {
 	struct pollfd pfd[MAX_DEVS];
 	int i;

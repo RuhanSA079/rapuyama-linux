@@ -65,7 +65,7 @@ sed -E -e "s#^(file /bin/busybox ).*( 755 0 0)#\1$BB\2#" \
 	"$ROOT/linux/initramfs/initramfs.list" > "$KOUT/initramfs.list"
 
 # input / sensor test tools (linux/initramfs/{keytest,touchtest}.c, sensortest.sh)
-for t in keytest touchtest; do
+for t in keytest touchtest physdump; do
 	arm-linux-gnu-gcc -march=armv6k -marm -static -nostdlib -fno-pie -no-pie \
 		-ffreestanding -fno-builtin -fomit-frame-pointer -fno-stack-protector \
 		-Os -Wall -Wextra -Werror \
@@ -76,6 +76,8 @@ done
 	printf 'file /usr/bin/keytest %s 755 0 0\n' "$KOUT/rootfs-extra/keytest"
 	printf 'file /usr/bin/touchtest %s 755 0 0\n' "$KOUT/rootfs-extra/touchtest"
 	printf 'file /usr/bin/sensortest %s 755 0 0\n' "$ROOT/linux/initramfs/sensortest.sh"
+	printf 'file /usr/bin/physdump %s 755 0 0\n' "$KOUT/rootfs-extra/physdump"
+	printf 'file /usr/bin/swddump %s 755 0 0\n' "$ROOT/linux/initramfs/swddump.sh"
 } >> "$KOUT/initramfs.list"
 
 echo ">> kernel"
@@ -88,6 +90,8 @@ cp "$ROOT/linux/kernel/e6.config" "$KOUT/.config"
 	--enable IIO_ST_ACCEL_3AXIS --enable IIO_ST_ACCEL_I2C_3AXIS \
 	--enable AK8974 --enable SENSORS_TSL2563 \
 	--enable RMI4_CORE --enable RMI4_I2C --enable RMI4_2D_SENSOR --enable RMI4_F11
+# /dev/mem for all of RAM: physdump / swddump read the firmware's memory
+"$KSRC/scripts/config" --file "$KOUT/.config" --disable STRICT_DEVMEM
 make -C "$KSRC" O="$KOUT" olddefconfig >/dev/null
 make -C "$KSRC" O="$KOUT" -j"$(nproc)" Image scripts_dtc
 
