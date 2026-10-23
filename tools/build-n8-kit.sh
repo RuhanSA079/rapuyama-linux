@@ -61,12 +61,23 @@ sed -E -e "s#^(file /bin/busybox ).*( 755 0 0)#\1$BB\2#" \
 echo ">> kernel"
 cp "$ROOT/linux/kernel/e6.config" "$KOUT/.config"
 "$KSRC/scripts/config" --file "$KOUT/.config" --set-str INITRAMFS_SOURCE "$KOUT/initramfs.list"
+# n8 chips (docs/n8-hardware.md, used by n8-hw.dts): gpio keys, lis302dl,
+# ami305 / ak8974, tsl2563. the e6 dtbs don't name them, so they stay idle there
+"$KSRC/scripts/config" --file "$KOUT/.config" --enable KEYBOARD_GPIO_POLLED \
+	--enable IIO --enable IIO_BUFFER --enable IIO_TRIGGERED_BUFFER \
+	--enable IIO_ST_ACCEL_3AXIS --enable IIO_ST_ACCEL_I2C_3AXIS \
+	--enable AK8974 --enable SENSORS_TSL2563
 make -C "$KSRC" O="$KOUT" olddefconfig >/dev/null
 make -C "$KSRC" O="$KOUT" -j"$(nproc)" Image scripts_dtc
 
 echo ">> dtb"
-"$KOUT/scripts/dtc/dtc" -q -I dts -O dtb -i "$ROOT/linux/boot" \
-	-o "$KOUT/$PHONE-usb.dtb" "$ROOT/linux/boot/$PHONE-usb.dts"
+# n8-i2c: buses on, no chips (i2cdetect). n8-hw: the chips found that way
+DTBS="$PHONE-usb"
+[ "$PHONE" = n8 ] && DTBS="$DTBS n8-i2c n8-hw"
+for v in $DTBS; do
+	"$KOUT/scripts/dtc/dtc" -q -I dts -O dtb -i "$ROOT/linux/boot" \
+		-o "$KOUT/$v.dtb" "$ROOT/linux/boot/$v.dts"
+done
 
 echo ">> loader"
 (cd "$ROOT/linux/stage0/symbian-loader" &&
@@ -79,6 +90,9 @@ mkdir -p "$KIT/phone-E-drive" "$KIT/install" "$KIT/pc"
 cp "$KOUT/arch/arm/boot/Image" "$KIT/phone-E-drive/Image"
 # the loader always reads E:\e6.dtb
 cp "$KOUT/$PHONE-usb.dtb" "$KIT/phone-E-drive/e6.dtb"
+# the others: copy one over E:\e6.dtb to use it
+mkdir -p "$KIT/phone-E-drive/alt"
+for v in $DTBS; do cp "$KOUT/$v.dtb" "$KIT/phone-E-drive/alt/"; done
 cp "$ROOT/out/e6bfix.sis" "$ROOT/out/e6logs.sis" "$KIT/install/"
 cp "$ROOT/tools/parse_klog.py" "$KIT/pc/"
 cp "$ROOT/docs/other-phones.md" "$KIT/INSTRUCTIONS.md"

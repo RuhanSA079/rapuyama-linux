@@ -151,3 +151,26 @@ Whether "In/Out" is from the BT chip's or the RapuYama's side is not stated **[G
 - panel controller IC, panel id and its DCS init (from the ROM / `vcemu`)
 - whether "BTUARTOut" (J6355) is RapuYama TX or RX
 - touch controller model and address (Synaptics is a guess from "ATTN")
+
+## Confirmed on the phone (23.10.2026, first boots, RM-596)
+
+E6 `Image` + `n8-usb.dtb`, booted with `e6bfix`, USB shell. Linux ran from a boot block
+at `0x18c00000`, 93 MB RAM. The battery driver reads 4169 mV. eMMC = `mmcblk1`,
+`MAG4EM` 15 GiB (Samsung): `switch to bus width 4 failed`, but 1-bit reads work. Sector 0
+is a FAT32 boot sector with no partition table, i.e. the whole device is `E:`.
+
+`i2cdetect -y -r` with `n8-i2c.dtb` (both controllers on, no chips in the DT):
+
+| Linux bus | Controller | Schematic net | Addresses | Chip |
+| --- | --- | --- | --- | --- |
+| `i2c-0` | `i2c@20032200` (i2c0.dll) | I2C0 | `0x0f` | magnetometer N1105 (ami305 / ak8974) |
+| | | | `0x1d` | accelerometer N1103, LIS302DL (as predicted) |
+| | | | `0x4b` | touch controller, **maXTouch address range** (the E6 one is at 0x4a), so likely not Synaptics |
+| `i2c-1` | `i2c@20032500` (hs i2c port 3) | I2C2 | `0x29` | light sensor V1100 (TSL2563 address) |
+| | | | `0x33` | LED driver N2402 (LP5523 range) |
+| | | | `0x60` | headphone amp N2000 (TPA6130A2) |
+| | | | `0x6a`, `0x6b` | the two bq2415x chargers N3301 / N3350 |
+
+The FM radio didn't answer (probably powered down). `n8-hw.dts` uses these: the
+touchscreen, accelerometer, magnetometer, light sensor and `gpio-keys-polled`; the chargers,
+the LED driver and the headphone amp stay off.
