@@ -341,8 +341,10 @@ GLDEF_C TInt E32Main(){
 	// symbian app, so with a bluetooth link up this catches the live state of
 	// the block; by the time linux sees it the handoff has always left
 	// +0x84 = 0 and its transmitter never shifts a bit. Peek() maps uncached,
-	// unlike ReadPhys. Read only, a few lines in the log
-	{
+	// unlike ReadPhys. Read only, a few lines in the log.
+	// Opt in with E:\\btdump.txt: a dump that kills the app would otherwise
+	// leave no way to boot at all
+	if(Has(_L("E:\\btdump.txt"))){
 		static const TUint32 KBtRegs[]={
 			0x20025a04, 0x20025a08, 0x20025a0c, 0x20025a10, 0x20025a14,
 			0x20025a18, 0x20025a1c, 0x20025a20, 0x20025a28, 0x20025a2c,

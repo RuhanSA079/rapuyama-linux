@@ -1028,11 +1028,15 @@ TInt DRunBlobChan::Request(TInt aFunction, TAny* a1, TAny* a2){
 		TUint32 base=phys&~0xfffu;
 		TUint32 off=phys&0xfff;
 		DPlatChunkHw* c=NULL;
+		// the chunk is a kernel allocation: without a critical section a
+		// repeated Peek (dumping a whole register block) kills the client
+		NKern::ThreadEnterCS();
 		TInt r=DPlatChunkHw::New(c, base, 0x1000, EMapAttrSupRw|EMapAttrFullyBlocking);
-		if(r!=KErrNone){return r;}
+		if(r!=KErrNone){NKern::ThreadLeaveCS(); return r;}
 		volatile TUint32* reg=(volatile TUint32*)(c->LinearAddress()+off);
 		TUint32 val=*reg;
 		c->Close(NULL);
+		NKern::ThreadLeaveCS();
 		return Kern::ThreadRawWrite(&Kern::CurrentThread(), a2, &val, sizeof(val));
 	}
 
