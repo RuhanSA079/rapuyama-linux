@@ -217,6 +217,47 @@ static void top_read(u32 reg)
 	       " never ready (wlcore's timeout)\n");
 }
 
+/* a register (0x300000 + off) through the boot partition, printed */
+static u32 reg_read(const char *name, u32 off)
+{
+	u32 v = 0;
+
+	if (read32(name, 0x14fc0 + off, &v) < 0) {
+		puts_(name);
+		puts_(": no ready busy word\n");
+		return 0;
+	}
+	puts_(name);
+	puts_(" = ");
+	puthex(v, 8);
+	puts_("\n");
+	return v;
+}
+
+/*
+ * TI's own init before any top register access (the Symbian driver,
+ * symbian/oss.FCL.sf.adapt.TIWLANWL1271 TWD/FW_Transfer/HwInit.c
+ * hwInit_BootSm stages 0-1): reference clock 19.2 MHz into PLL_PARAMETERS
+ * (TI reads it back, 0xffffffff = chip not alive), the wake up counter
+ * pause to the highest threshold, arm the ELP wake up, 500 us
+ */
+static void ti_init(void)
+{
+	u32 v;
+
+	reg_read("PLL_PARAMETERS (power up)", 0x6040);
+	write32(0x14fc0 + 0x6040, 3);	/* PLL_PARAMETERS: 19.2 / 38.4 MHz */
+	v = reg_read("PLL_PARAMETERS", 0x6040);
+	if (v == 0xffffffffu)
+		puts_("  0xffffffff: TI's driver gives up here (chip not alive)\n");
+	v = reg_read("WU_COUNTER_PAUSE", 0x6008);
+	write32(0x14fc0 + 0x6008, (v & ~0x3ffu) | 0x3ff);
+	write32(0x14fc0 + 0x6100, 4);	/* WELP_ARM_COMMAND */
+	msleep(1);
+	reg_read("SCR_PAD2", 0x5610);
+	reg_read("ELP_WAKE_UP_STS", 0x5850);
+}
+
 void __attribute__((naked)) _start(void)
 {
 	__asm__ volatile("mov r0, sp\n\tb main_args");
@@ -292,5 +333,10 @@ void main_args(u32 *sp)
 	/* 6. what wlcore reads next: the PG version fuse, then the spare reg */
 	top_read(0x050a);	/* WL127X_REG_FUSE_DATA_2_1 */
 	top_read(0x2320);	/* WL_SPARE_REG */
+	/* 7. TI's chip init first, then the same top registers again */
+	puts_("-- TI init (hwInit_BootSm 0-1), then again\n");
+	ti_init();
+	top_read(0x050a);
+	top_read(0x2320);
 	exit_with_status(id == 0x04030111 || id == 0x04030101 ? 0 : 3);
 }
