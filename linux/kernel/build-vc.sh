@@ -3,9 +3,9 @@
 # usage: KERN_BIN=/path/to/kern.bin [WLAN=0|1] [DEVMEM_ALL=1] ./build-vc.sh
 # WLAN: the n8 WL1271 (wlcore + TI firmware), on by default when the TI
 # firmware (wl127x-fw-5-sr/mr.bin, linux-firmware) is in WLAN_FW, WLAN=0
-# leaves it out. The NVS (calibration + MAC) is per phone: n8boot reads the
-# phone's own at every boot and init loads it (nvsget), so WLAN_FW needs no
-# wl127x-nvs.bin; one there goes in as the fallback for an n8boot without it
+# leaves it out. The NVS (calibration + MAC) is per phone and never goes into
+# the kernel: n8boot reads the phone's own at every boot, init loads it
+# (nvsget). A wl127x-nvs.bin in WLAN_FW is ignored
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -50,8 +50,8 @@ if [ "${WLAN:-}" = 1 ]; then
 	for f in wl127x-fw-5-sr.bin wl127x-fw-5-mr.bin; do
 		[ -f "$WLAN_FW/$f" ] || { echo "WLAN=1: missing $WLAN_FW/$f (linux-firmware ti-connectivity)"; exit 1; }
 	done
-	[ -f "$WLAN_FW/wl127x-nvs.bin" ] && echo "WLAN: built-in NVS fallback from $WLAN_FW" ||
-		echo "WLAN: no built-in NVS, n8boot's (nvsget) only"
+	[ -f "$WLAN_FW/wl127x-nvs.bin" ] &&
+		echo "WLAN: ignoring $WLAN_FW/wl127x-nvs.bin, the NVS comes from n8boot (nvsget)"
 fi
 
 # the checked-in list has absolute paths from the author's machine: point
@@ -104,12 +104,11 @@ done
 	printf 'file /etc/e6-check.sh %s 755 0 0\n' "$HERE/../initramfs/e6-check.sh"
 	printf 'file /etc/fonts/local.conf %s 644 0 0\n' "$HERE/../initramfs/fonts-local.conf"
 	printf 'file /usr/bin/wlantest %s 755 0 0\n' "$HERE/../initramfs/wlantest.sh"
-	# WLAN=1: n8 WLAN firmware from WLAN_FW (default work/wlan/fw), plus a
-	# fallback NVS if one is there (per phone, not in git, see the top)
+	# WLAN=1: n8 WLAN firmware from WLAN_FW (default work/wlan/fw), TI's only,
+	# never an NVS (per phone: n8boot + nvsget, see the top)
 	if [ "${WLAN:-}" = 1 ]; then
 		printf 'dir /lib/firmware/ti-connectivity 755 0 0\n'
-		for f in wl127x-fw-5-sr.bin wl127x-fw-5-mr.bin wl127x-nvs.bin; do
-			[ -f "$WLAN_FW/$f" ] || continue
+		for f in wl127x-fw-5-sr.bin wl127x-fw-5-mr.bin; do
 			printf 'file /lib/firmware/ti-connectivity/%s %s 644 0 0\n' "$f" "$WLAN_FW/$f"
 		done
 	fi
