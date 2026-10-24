@@ -1,0 +1,315 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Ruhan van der Berg <35257374+RuhanSA079@users.noreply.github.com>
+Date: Sat, 24 Oct 2026 20:10:00 +0200
+Subject: [PATCH] ARM: rapuyama: secure watchdog bridge for the N8
+
+The PA_SWD 0x1f mechanism is the same on the N8 (RM-596, Anna 024.001)
+as on the E6, only the addresses differ, so the per-image constants move
+into a table and the machine picks its row. secure_wdt_call.S is
+unchanged: it only needs the three ROM entry points, a stack and the
+page tables saved at the handoff.
+
+N8 values, all re-read from the live image before anything is called
+(work/swd-n8/NOTES.md sections 2 and 7-9): ISA data VA 0xc6800000 is
+phys 0x1fd50000 here (640 pages, contiguous, reserved by n8.dts as
+isasw@1fd50000), alloc/free/pet at 0xc6361cb3 / 0xc6361bad / 0xc6362b63
+with the same prologues as the E6, and the token is the u16 the
+firmware's own pet caller reads, 240 at the handoff.
+
+Two N8-only gates, because its state sits in ordinary Linux RAM:
+the literals the ROM uses for the buffer pool and the transport have to
+match, and the transport object still has to point into that pool, which
+is how a wiped region is caught before a call. The isah hook words are
+not checked on the N8: unlike the E6's they point into Symbian rather
+than into the ISA image, so they are not image identity.
+
+The E6 borrows the stopped server task's stack. No such saved SP exists
+on the N8, so it uses the top 16 KB of a 60 KB run of the data region
+that reads all zero in every dump; init refuses if it is not still clear,
+which also catches the reservation failing.
+
+Opt in with e6.swd=1 (work/dts-test/n8-swd.dts); untested on the phone.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ arch/arm/mach-rapuyama/secure_wdt.c | 206 +++++++---
+ 1 file changed, 178 insertions(+), 28 deletions(-)
+
+--- a/arch/arm/mach-rapuyama/secure_wdt.c
++++ b/arch/arm/mach-rapuyama/secure_wdt.c
+@@ -1,10 +1,27 @@
+ // SPDX-License-Identifier: GPL-2.0
+-/* E6 firmware PA_SWD command 0x1f, normally sent by ISASW every timeout, 30s */
++/*
++ * PA_SWD command 0x1f: the secure watchdog that the firmware's ISA software
++ * pets every timeout (30 s). After the handoff no ISA task runs any more, so
++ * Linux has to send the command itself or the phone is reset.
++ *
++ * The call runs under Symbian's page tables (the L1 copy the loader saves in
++ * the handoff block), so every address below is a Symbian VA, and the stack
++ * the ROM functions use has to be one those tables map.
++ *
++ * E6: the original port. N8 (RM-596, Anna 024.001): the same mechanism with
++ * other addresses, evidence in work/swd-n8/NOTES.md. The two differ in one
++ * more way: the E6 borrows the stack of the server task that was stopped at
++ * the handoff, while on the N8 no such saved SP was found. The N8 instead
++ * uses a range of the ISA data region that is unused (all zero) and that the
++ * device tree reserves, so nothing else can be in it; init refuses if it is
++ * not clear.
++ */
+ #include <linux/init.h>
+ #include <linux/io.h>
+ #include <linux/kernel.h>
+ #include <linux/of.h>
+ #include <linux/slab.h>
++#include <linux/string.h>
+ #include <linux/unaligned.h>
+ #include <linux/workqueue.h>
+ #include <asm/cacheflush.h>
+@@ -12,10 +29,7 @@
+ 
+ #define ISAH_PHYS	0x1f0f1000
+ #define ISAH_MAGIC	0x48415349
+-#define GUEST_PHYS	0x1f8b0000
+-#define GUEST_VIRT	0xc6800000
+-#define GUEST_SIZE	0x30000
+-#define CODE_PHYS	0x10480000
++#define CODE_SIZE	0x70000
+ #define IDENT_ATTR	0x1c0e
+ 
+ /* offsets are shared with secure_wdt_call.S */
+@@ -27,6 +41,83 @@
+ 	u32 sctlr, guest_sctlr;
+ };
+ 
++/*
++ * Everything that differs between firmware images. The signatures and the
++ * literals are read out of the live ISA image before anything is called: a
++ * different image fails them and the bridge stays off.
++ */
++struct swd_variant {
++	const char *compat;
++	u32 guest_phys, guest_virt, guest_size;
++	u32 code_phys;
++	/* Thumb entry points (VA | 1) and the prologue each must start with */
++	u32 alloc_fn, free_fn, pet_fn;
++	u32 alloc_off, free_off, pet_off;
++	u32 alloc_sig, free_sig, pet_sig;
++	/* literal holding (token VA - 2), as the firmware's own pet caller reads it */
++	u32 token_lit_off;
++	/* literals that pin the data layout, checked but not otherwise used */
++	u32 lit_off[4], lit_val[4];
++	/* transport object VA; its first word points into the buffer pool while
++	 * the ISA side is live, which is how we know the state survived
++	 */
++	u32 transport_va, pool_lo, pool_hi;
++	/* isah hook words, 0 = do not check (the N8 ones point into Symbian,
++	 * not into the ISA image, and are not stable identity)
++	 */
++	u32 hook0, hook1;
++	/* stack: a saved SP read from the guest region (E6) ... */
++	u32 sp_slot_off, sp_min, sp_max;
++	/* ... or a range that must be all zero and is used top down (N8) */
++	u32 sp_zero_top, sp_zero_size;
++};
++
++static const struct swd_variant swd_variants[] = {
++	{
++		.compat = "nokia,e6",
++		.guest_phys = 0x1f8b0000, .guest_virt = 0xc6800000,
++		.guest_size = 0x30000,
++		.code_phys = 0x10480000,
++		.alloc_fn = 0xc6261abf, .free_fn = 0xc62619b9,
++		.pet_fn = 0xc6262b39,
++		.alloc_off = 0x61abe, .free_off = 0x619b8, .pet_off = 0x62b38,
++		.alloc_sig = 0x4605b570, .free_sig = 0x4606b5f8,
++		.pet_sig = 0x4605b5fe,
++		.token_lit_off = 0x58b90,
++		.hook0 = 0xc62bb5d7, .hook1 = 0xc62bb5e1,
++		.sp_slot_off = 0x1b7bc, .sp_min = 0xc6801000,
++		.sp_max = 0xc6c4c000,
++	},
++	{
++		/*
++		 * N8 RM-596 Anna 024.001. The ISA data region sits in ordinary
++		 * Linux RAM here (phys 0x1fd50000, VA 0xc6800000, contiguous),
++		 * so n8.dts reserves it as isasw@1fd50000; the ISA image and
++		 * the PA table are below PHYS_OFFSET and out of reach anyway.
++		 */
++		.compat = "nokia,n8",
++		.guest_phys = 0x1fd50000, .guest_virt = 0xc6800000,
++		.guest_size = 0x280000,
++		.code_phys = 0x10480000,
++		.alloc_fn = 0xc6361cb3, .free_fn = 0xc6361bad,
++		.pet_fn = 0xc6362b63,
++		.alloc_off = 0x61cb2, .free_off = 0x61bac, .pet_off = 0x62b62,
++		.alloc_sig = 0x4605b570, .free_sig = 0x4606b5f8,
++		.pet_sig = 0x4605b5fe,
++		.token_lit_off = 0x586dc,
++		.lit_off = { 0x642a0, 0x642a4, 0x62c84, 0x62c8c },
++		.lit_val = { 0xc6af202c, 0xc6af8000, 0xc680b244, 0xc68189c4 },
++		.transport_va = 0xc68189c4,
++		.pool_lo = 0xc6af202c, .pool_hi = 0xc6af8000,
++		/*
++		 * 60 KB of the data region read all zero in every dump
++		 * (0xc68d1000..0xc68e0000); take the top 16 KB of it, which
++		 * the ROM frames never come close to filling.
++		 */
++		.sp_zero_top = 0xc68e0000, .sp_zero_size = 0x4000,
++	},
++};
++
+ extern void rapuyama_swd_call(struct swd_call *call);
+ extern void rapuyama_note(const char *fmt, ...);
+ 
+@@ -98,38 +189,101 @@
+ 	schedule_delayed_work(&swd_work, (timeout - 30) * HZ);
+ }
+ 
++static const struct swd_variant * __init swd_match(void)
++{
++	int i;
++
++	for (i = 0; i < ARRAY_SIZE(swd_variants); i++)
++		if (of_machine_is_compatible(swd_variants[i].compat))
++			return &swd_variants[i];
++	return NULL;
++}
++
++/* the stack the ROM functions run on, 0 = no usable one */
++static u32 __init swd_stack(const struct swd_variant *v, const u8 *guest)
++{
++	u32 sp, off;
++
++	if (!v->sp_zero_top) {
++		/* E6: the stopped server task's own stack */
++		sp = get_unaligned_le32(guest + v->sp_slot_off) & ~7U;
++		if (sp < v->sp_min || sp > v->sp_max)
++			return 0;
++		return sp;
++	}
++	/*
++	 * N8: a range of the data region that nothing uses. It has to be
++	 * inside the mapped guest window and still clear: anything else means
++	 * the reservation did not hold and the call could corrupt live state.
++	 */
++	sp = v->sp_zero_top & ~7U;
++	if (sp - v->sp_zero_size < v->guest_virt ||
++	    sp > v->guest_virt + v->guest_size)
++		return 0;
++	off = sp - v->sp_zero_size - v->guest_virt;
++	if (memchr_inv(guest + off, 0, v->sp_zero_size)) {
++		pr_err("rapuyama-swd: stack range %08x+%x is not clear\n",
++		       sp - v->sp_zero_size, v->sp_zero_size);
++		return 0;
++	}
++	return sp;
++}
++
+ static int __init rapuyama_swd_init(void)
+ {
++	const struct swd_variant *v;
+ 	const u32 *h;
+ 	u8 *guest;
+ 	u32 *code;
+-	u32 token_ptr, sp, code_pa, data_pa;
++	u32 token_ptr, sp, code_pa, data_pa, transport;
+ 	int ret = -ENODEV;
++	int i;
+ 
+ 	BUILD_BUG_ON(offsetof(struct swd_call, stage) != 88);
+ 	BUILD_BUG_ON(offsetof(struct swd_call, guest_sctlr) != 96);
+-	if (!swd_enabled || !of_machine_is_compatible("nokia,e6"))
++	if (!swd_enabled)
++		return 0;
++	v = swd_match();
++	if (!v)
+ 		return 0;
+ 	h = memremap(ISAH_PHYS, 0x5000, MEMREMAP_WB);
+-	guest = memremap(GUEST_PHYS, GUEST_SIZE, MEMREMAP_WB);
+-	code = memremap(CODE_PHYS, 0x70000, MEMREMAP_WB);
++	guest = memremap(v->guest_phys, v->guest_size, MEMREMAP_WB);
++	code = memremap(v->code_phys, CODE_SIZE, MEMREMAP_WB);
+ 	if (!h || !guest || !code)
+ 		goto out;
+ 	/* firmware-specific bridge: reject another image before calling any code */
+-	if (h[0] != ISAH_MAGIC || h[1] != 1 || h[0x10] != 0xc62bb5d7 ||
+-	    h[0x11] != 0xc62bb5e1)
++	if (h[0] != ISAH_MAGIC || h[1] != 1)
++		goto out;
++	if (v->hook0 && (h[0x10] != v->hook0 || h[0x11] != v->hook1))
++		goto out;
++	if (get_unaligned_le32((u8 *)code + v->alloc_off) != v->alloc_sig ||
++	    get_unaligned_le32((u8 *)code + v->free_off) != v->free_sig ||
++	    get_unaligned_le32((u8 *)code + v->pet_off) != v->pet_sig)
++		goto out;
++	/* the literals the ROM itself uses for the pool and the transport */
++	for (i = 0; i < ARRAY_SIZE(v->lit_off); i++)
++		if (v->lit_off[i] &&
++		    get_unaligned_le32((u8 *)code + v->lit_off[i]) != v->lit_val[i])
++			goto out;
++	/*
++	 * the ISA state has to have survived the handoff: the transport
++	 * object's first word still points into the secure buffer pool
++	 */
++	if (v->transport_va) {
++		transport = get_unaligned_le32(guest + v->transport_va -
++					       v->guest_virt);
++		if (transport < v->pool_lo || transport >= v->pool_hi) {
++			pr_err("rapuyama-swd: transport %08x outside the pool, ISA state gone\n",
++			       transport);
++			goto out;
++		}
++	}
++	token_ptr = READ_ONCE(code[v->token_lit_off / 4]);
++	if (token_ptr < v->guest_virt ||
++	    token_ptr + 4 > v->guest_virt + v->guest_size)
+ 		goto out;
+-	if (get_unaligned_le32((u8 *)code + 0x61abe) != 0x4605b570 ||
+-	    get_unaligned_le32((u8 *)code + 0x619b8) != 0x4606b5f8 ||
+-	    get_unaligned_le32((u8 *)code + 0x62b38) != 0x4605b5fe)
+-		goto out;
+-	token_ptr = READ_ONCE(code[0x58b90 / 4]);
+-	if (token_ptr < GUEST_VIRT || token_ptr + 4 > GUEST_VIRT + GUEST_SIZE)
+-		goto out;
+-	/* borrow the stopped server task's stack; the ROM VA-to-PA helper uses
+-	 * Symbian's original page tables, so an identity Linux stack won't work */
+-	sp = get_unaligned_le32(guest + 0x1b7bc) & ~7U;
+-	if (sp < GUEST_VIRT + 0x1000 || sp > 0xc6c4c000)
++	sp = swd_stack(v, guest);
++	if (!sp)
+ 		goto out;
+ 	swd_pgd = (u32 *)__get_free_pages(GFP_KERNEL | __GFP_ZERO, 2);
+ 	swd = (struct swd_call *)get_zeroed_page(GFP_KERNEL);
+@@ -148,13 +302,13 @@
+ 	swd->guest_nmrr = h[9];
+ 	swd->guest_sctlr = h[7];
+ 	swd->guest_sp = sp;
+-	swd->alloc_fn = 0xc6261abf;
+-	swd->free_fn = 0xc62619b9;
+-	swd->pet_fn = 0xc6262b39;
+-	swd->token = get_unaligned_le16(guest + token_ptr - GUEST_VIRT + 2);
++	swd->alloc_fn = v->alloc_fn;
++	swd->free_fn = v->free_fn;
++	swd->pet_fn = v->pet_fn;
++	swd->token = get_unaligned_le16(guest + token_ptr - v->guest_virt + 2);
+ 	INIT_DELAYED_WORK(&swd_work, swd_ping);
+-	pr_info("rapuyama-swd: PA_SWD 0x1f ready, token %u guest stack %08x\n",
+-		swd->token, sp);
++	pr_info("rapuyama-swd: %s PA_SWD 0x1f ready, token %u guest stack %08x\n",
++		v->compat, swd->token, sp);
+ 	schedule_delayed_work(&swd_work, 5 * HZ);
+ 	ret = 0;
+ out:
+@@ -169,6 +323,8 @@
+ 			free_pages((unsigned long)swd_pgd, 2);
+ 		if (swd)
+ 			free_page((unsigned long)swd);
++		swd_pgd = NULL;
++		swd = NULL;
+ 		pr_err("rapuyama-swd: firmware setup rejected (%d)\n", ret);
+ 	}
+ 	return ret;
+-- 
+2.43.0
+
