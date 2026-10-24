@@ -64,7 +64,7 @@ class RRunBlob : public RBusLogicalChannel{
 			EControlHookCbus, EControlHookCbusRead, EControlHookCbusRemove,
 			EControlModemReset, EControlPeek,
 			EControlHookBeac8, EControlHookBeac8Read, EControlHookBeac8Remove,
-			EControlWatchService, EControlWlanClock};
+			EControlWatchService, EControlWlanClock, EControlNvsStore};
 	#ifndef __KERNEL_MODE__
 		TInt Open(){return DoCreate(KRunBlobName, TVersion(1,0,0), KNullUnit, NULL, NULL);}
 		TInt Run(TDes8& aBuf){return DoControl(EControlRunBlob, (TAny*)&aBuf);}
@@ -152,6 +152,10 @@ class RRunBlob : public RBusLogicalChannel{
 		// client id, change result, gpio out register, gpio dir register
 		// aStep: 1 = rom check + RegisterClient, 2 = ChangeResourceState, 4 = genio100 high
 		TInt WlanClock(TDes8& aBuf, TInt aStep){return DoControl(EControlWlanClock, (TAny*)&aBuf, (TAny*)aStep);}
+		// N8: a block (<= 1 KB: header + the Linux WL1271 NVS) the boot
+		// writes to phys 0x1f0f6000 right before the jump; empty = a zero
+		// header there (no stale NVS from an earlier boot)
+		TInt NvsStore(const TDesC8& aBlock){return DoControl(EControlNvsStore, (TAny*)&aBlock);}
 
 		// patch karap's cbus-write fn 0x800b8494 to log every PMIC/CBUS write
 		// {dev,reg,val} into a ram ring (ring[0]=count, 16-byte slots at +4).

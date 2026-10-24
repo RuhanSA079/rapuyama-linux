@@ -18,6 +18,10 @@
 #     APP_CAPS sets the exe's capabilities (default all): a process can only
 #     load DLLs with at least its capabilities, ROM DLLs are often all-tcb;
 #     APP_CXXFLAGS adds compiler flags for the app only (-fexceptions)
+#   EXTRA_NAME=n8wlnv EXTRA_SRC=n8wlnv_app.cpp EXTRA_UID=0xe1000058 \
+#   EXTRA_LIBS=... EXTRA_CAPS=... EXTRA_CXXFLAGS=... ./build_app.sh n8boot ...
+#     -> a second exe (sys/bin/<EXTRA_NAME>.exe, no app icon) in the same
+#     sis, with its own libraries / capabilities / flags (n8boot's helper)
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"
@@ -97,12 +101,26 @@ $LD "${LDFLAGS[@]}" --entry _E32Startup -u _E32Startup \
     --linkas="${NAME}_0x$UHEX{000a0000}[$UHEX].exe" --libpath="$DRV/import" \
     --capability="${APP_CAPS:-all}" --compressionmethod=none
 
+if [ -n "${EXTRA_NAME:-}" ]; then
+	EHEX=$(printf '%08x' $((EXTRA_UID)))
+	echo ">> $NAME: extra exe $EXTRA_NAME"
+	$CXX "${COMMON[@]}" -D_UNICODE ${EXTRA_CXXFLAGS:-} -o "$OUT/extra.o" "$HERE/$EXTRA_SRC"
+	$LD "${LDFLAGS[@]}" --entry _E32Startup -u _E32Startup \
+	    "$OUT/extra.o" "$OUT/uc_exe.o" "$OUT/uc_exe_cia.o" \
+	    "$DRV/import/EUSER.dso" "$DRV/import/EFSRV.dso" ${EXTRA_LIBS:-} "$LIBGCC" -o "$OUT/extra.elf"
+	"$E2E" --elfinput="$OUT/extra.elf" --output="$OUT/$EXTRA_NAME.exe" \
+	    --targettype=EXE --uid1=0x1000007a --uid2=0x100039ce --uid3="$EXTRA_UID" \
+	    --linkas="$EXTRA_NAME{000a0000}[$EHEX].exe" --libpath="$DRV/import" \
+	    --capability="${EXTRA_CAPS:-all}" --compressionmethod=none
+fi
+
 echo ">> $NAME: sis"
 W="$OUT/sis"
 rm -rf "$W"
 mkdir -p "$W/approot/sys/bin" "$W/approot/resource/apps" \
 	"$W/approot/private/10003a3f/import/apps"
 cp "$OUT/${NAME}_0x$UHEX.exe" "$OUT/$LDDN.ldd" "$W/approot/sys/bin/"
+[ -n "${EXTRA_NAME:-}" ] && cp "$OUT/$EXTRA_NAME.exe" "$W/approot/sys/bin/"
 # the ptdump reg/loc resources with the names + uid swapped. same string
 # lengths, so only the bytes change; the uid checksum in the header is redone
 python3 - "$DRV/sis/approot" "$W/approot" "$NAME" "$UID3" <<'EOF'

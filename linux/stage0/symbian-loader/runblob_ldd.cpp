@@ -142,6 +142,12 @@ static TUint32 Va2Pa(TUint32 aVa){
 // the jump. phys 0x1f0f1000 +0x5000, inside the ramcon no-map reservation:
 // ramcon ends at 0x1f0f0008, the flight recorder starts at 0x1f0f8000
 const TUint32 KIsaHandoffPhys=0x1f0f1000;
+// N8 WLAN NVS handoff (EControlNvsStore): right after the isah block, before
+// the flight recorder (0x1f0f8000). layout and checksum: boot_app.cpp
+const TUint32 KNvsHandoffPhys=0x1f0f6000;
+const TInt KNvsHandoffMax=0x400;
+static TUint8 gNvsBlock[KNvsHandoffMax];
+static TInt gNvsLen=0;
 const TInt KIsaHandoffSz=0x5000;
 const TUint32 KIsaMagic=0x48415349; // 'ISAH'
 const TUint32 KKarapIsaCb=0xc8004068; // karap hook table, 6 words
@@ -641,6 +647,8 @@ TInt DRunBlobChan::Request(TInt aFunction, TAny* a1, TAny* a2){
 		// filled with irqs off (symbian may own that ram until it dies)
 		DPlatChunkHw* hc=NULL;
 		if(DPlatChunkHw::New(hc, KIsaHandoffPhys, KIsaHandoffSz, EMapAttrSupRw|EMapAttrFullyBlocking)!=KErrNone){hc=NULL;}
+		DPlatChunkHw* nc=NULL;
+		if(DPlatChunkHw::New(nc, KNvsHandoffPhys, 0x1000, EMapAttrSupRw|EMapAttrFullyBlocking)!=KErrNone){nc=NULL;}
 
 #ifdef RB_CALIB_KICK
 		// send securitykext's periodic request now
@@ -658,6 +666,13 @@ TInt DRunBlobChan::Request(TInt aFunction, TAny* a1, TAny* a2){
 		if(hc){
 			SaveIsaHandoff((volatile TUint32*)hc->LinearAddress());
 			WriteCalib((volatile TUint32*)hc->LinearAddress());
+			Dsb();
+		}
+		if(nc){
+			// the stored block, or a zero header (16 bytes) when there is none
+			volatile TUint8* d=(volatile TUint8*)nc->LinearAddress();
+			for(TInt i=0; i<16; ++i){d[i]=0;}
+			for(TInt i=0; i<gNvsLen; ++i){d[i]=gNvsBlock[i];}
 			Dsb();
 		}
 		PrepareHw();
@@ -1078,6 +1093,16 @@ TInt DRunBlobChan::Request(TInt aFunction, TAny* a1, TAny* a2){
 	// (wlanhpa sleeps 12).
 	// a1 = 5 word result: register result, client id, change result, out
 	// register, dir register. nothing else is touched
+	// N8: keep the WLAN NVS block for the boot (see KNvsHandoffPhys)
+	if(aFunction==RRunBlob::EControlNvsStore){
+		TInt len=Kern::ThreadGetDesLength(&Kern::CurrentThread(), a1);
+		if(len<0){return len;}
+		if(len>KNvsHandoffMax){return KErrTooBig;}
+		TPtr8 dst(gNvsBlock, 0, KNvsHandoffMax);
+		TInt r=Kern::ThreadDesRead(&Kern::CurrentThread(), a1, dst, 0);
+		gNvsLen=(r==KErrNone) ? dst.Length() : 0;
+		return r;
+	}
 	if(aFunction==RRunBlob::EControlWlanClock){
 		typedef TInt (*TPrmRegister)(TUint& aClientId, const TDesC8& aName);
 		typedef TInt (*TPrmChange)(TUint aClientId, TUint aResourceId, TInt aState, TAny* aCb, TAny* a5);
