@@ -68,7 +68,7 @@ State on 23.10.2026, Symbian Anna 024.001, `n8boot` loader, E6 kernel with the N
 
 | Part | Hardware | Status | Notes |
 | --- | --- | --- | --- |
-| WLAN | TI WL127x on SPI (gpio 74-77), IRQ gpio 73, enable on ball G9 | 🔧 todo | `wlcore` / `wl12xx` exist. NVS (MAC + calibration) dumped with `wldump.sis` through `wlanhwinit.dll` (see [n8-hardware.md](n8-hardware.md#wlan-calibration-nvs-and-mac-24102026)); its INI part needs converting to the Linux layout. Missing: a RapuYama SPI controller driver, the enable gpio, power / sleep clock |
+| WLAN | TI WL1271 PG2.0 on spi2 (`0x20020600`), IRQ genio73, enable genio100 (Linux gpio 612) | 🟡 SPI works | Kernel patch 0008 (`spi-rapuyama`, polled, half duplex: in a read each RXDATA read starts the next frame). `spitest` (in the initramfs) read chip id `04030111` over WSPI on 24.10.2026 with the defaults `io32=0 rxen=0`; `io32=1` or `rxen=7` read only zeros. Needs WLAN on in Symbian before the jump (the modem switches the 19.2 MHz reference clock). Test DTB: `work/dts-test/n8-spi.dtsi`. NVS (MAC + calibration) dumped with `wldump.sis` (see [n8-hardware.md](n8-hardware.md#wlan-calibration-nvs-and-mac-24102026)). Next: `wlcore`/`wl12xx` with firmware + converted NVS |
 | Bluetooth | BT/FM chip on a UART (`BTUART*`), reset gpio 54, wake gpio 53 | 🔧 todo | Needs a full RapuYama UART driver (only the early console exists, registers documented), then `hci_uart` |
 | FM radio / FM transmitter | in the BT/FM chip, FMIRQ gpio 23 | 🔬 research | Didn't answer on i2c-1, probably powered down |
 | GPS | separate module on I2C1, `GPS_EN_RESET`, `GPS_CLK` | 🔬 research | Proprietary protocol, no Linux driver |
