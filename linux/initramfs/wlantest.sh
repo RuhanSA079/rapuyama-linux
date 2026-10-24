@@ -2,7 +2,8 @@
 # wlantest: the N8's TI WL1271 under wlcore (kernel with WLAN=1, n8-wlan.dtb):
 # probe, firmware boot, MAC, interrupts, then a scan. capture the output.
 #
-#   wlantest          probe + firmware + scan
+#   wlantest          probe + firmware + scan (chip kept out of ELP sleep,
+#                     WLAN_ELP=1 wlantest allows it)
 #   wlantest <ssid> <passphrase>
 #                     the same, then WPA2 connect + DHCP (busybox udhcpc)
 #
@@ -49,6 +50,15 @@ if [ ! -d /sys/class/net/wlan0 ]; then
 	sleep 1
 	dmesg | sed -n '/Show Blocked State/,$p' | grep -v videocore
 	exit 1
+fi
+# keep the chip out of ELP (deep sleep): wlcore enters it through runtime
+# PM, and waking it times out on the N8 ("ELP wakeup timeout", likely the
+# modem-gated reference clock not coming back). WLAN_ELP=1 allows it
+if [ "$WLAN_ELP" != 1 ]; then
+	for d in /sys/bus/platform/devices/wl1*; do
+		[ -e "$d/power/control" ] && echo on > "$d/power/control" &&
+			echo "== $d: runtime pm off (no ELP)"
+	done
 fi
 echo "== firmware files"
 ls -la /lib/firmware/ti-connectivity/
