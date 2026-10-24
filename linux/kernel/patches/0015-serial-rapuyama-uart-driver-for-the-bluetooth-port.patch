@@ -1,8 +1,8 @@
 ---
  drivers/tty/serial/Kconfig         |  10 +
  drivers/tty/serial/Makefile        |   1 +
- drivers/tty/serial/rapuyama_uart.c | 475 ++++++++++
- 3 files changed, 486 insertions(+)
+ drivers/tty/serial/rapuyama_uart.c | 540 ++++++++++
+ 3 files changed, 551 insertions(+)
  create mode 100644 drivers/tty/serial/rapuyama_uart.c
 
 diff --git a/drivers/tty/serial/Kconfig b/drivers/tty/serial/Kconfig
@@ -40,10 +40,10 @@ index 6954aa468..766288a3a 100644
  # These Sparc drivers have to appear before others such as 8250
 diff --git a/drivers/tty/serial/rapuyama_uart.c b/drivers/tty/serial/rapuyama_uart.c
 new file mode 100644
-index 000000000..91be529ba
+index 000000000..8b77619c6
 --- /dev/null
 +++ b/drivers/tty/serial/rapuyama_uart.c
-@@ -0,0 +1,540 @@
+@@ -0,0 +1,610 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Nokia RapuYama UART (N8/E6/E7/C7), the port the bluetooth chip hangs off
@@ -102,10 +102,29 @@ index 000000000..91be529ba
 +#define RY_UART_TX		0xa4
 +#define RY_UART_FRAC_B		0xb8
 +
++/*
++ * Pin mux, from bc02_uart1 FUN_8018c554 (the power-on path) in this order.
++ * The N8 was seen live with +0x868 reading 0, i.e. the pads were NOT in uart
++ * mode, which fits bytes being clocked out to nothing.
++ */
++#define RY_MUX_BASE		0x20031864u
++#define RY_MUX_LEN		0x18u
++#define RY_MUX_864		0x00
++#define RY_MUX_868		0x04
++#define RY_MUX_870		0x0c
++#define RY_MUX_874		0x10
++#define RY_MUX_878		0x14
++
 +#define RY_UART_REF		38400000u
 +#define RY_UART_BITS_8		7
 +#define RY_UART_TX_RX_ON	3
-+#define RY_UART_IRQ_ALL		0x1e	/* the mask the firmware uses */
++/*
++ * The firmware runs with 0x3d while it is receiving (bc02_uart1 FUN_8018c3fc,
++ * the irq 99 isr, and the receive dfc FUN_8018da6c both write it). 0x1e/0x0e
++ * is only what Start leaves behind before receive is switched on, which is
++ * probably why we never saw an rx interrupt.
++ */
++#define RY_UART_IRQ_ALL		0x3d
 +#define RY_UART_RX_ERRORS	0xf00
 +
 +#define RY_UART_NR		1
@@ -115,6 +134,14 @@ index 000000000..91be529ba
 +static uint poll_us;
 +module_param(poll_us, uint, 0444);
 +MODULE_PARM_DESC(poll_us, "service the port from a timer every N us instead of on the irq (0 = irq)");
++
++static uint irq_mask = RY_UART_IRQ_ALL;
++module_param(irq_mask, uint, 0644);
++MODULE_PARM_DESC(irq_mask, "value for the irq enable mask (+0x38); the firmware uses 0x3d while receiving");
++
++static bool pinmux = true;
++module_param(pinmux, bool, 0644);
++MODULE_PARM_DESC(pinmux, "put the BTUART pads in uart mode at startup, as bc02_uart1's power-on does");
 +
 +static bool enable_block;
 +module_param(enable_block, bool, 0644);
@@ -127,12 +154,14 @@ index 000000000..91be529ba
 +struct ry_uart {
 +	struct uart_port port;
 +	struct clk *clk;
++	void __iomem *mux;
 +	struct hrtimer poll_timer;
 +	ktime_t poll_period;
 +	bool poll_on;
 +	bool tx_stopped;
 +	int irq[RY_UART_MAX_IRQ];
 +	int nirq;
++	bool tx_irq_on;		/* irq[1] = tx-needs-data, off while idle */
 +	u32 fixed_baud;		/* what the firmware left the line at */
 +};
 +
@@ -232,6 +261,23 @@ index 000000000..91be529ba
 +	}
 +	if (kfifo_len(&tport->xmit_fifo) < WAKEUP_CHARS)
 +		uart_write_wakeup(port);
++	/*
++	 * irq[1] (intc 101) means "tx wants more". bc02_uart1 enables it after
++	 * filling the fifo (FUN_8018dc9c) and its own isr disables it again,
++	 * so it is only live while there is something to send. Left enabled on
++	 * an empty fifo it asserts for ever: that was "irq 19: nobody cared".
++	 */
++	if (ry->nirq > 1 && !ry->poll_on) {
++		bool want = !kfifo_is_empty(&tport->xmit_fifo);
++
++		if (want && !ry->tx_irq_on) {
++			enable_irq(ry->irq[1]);
++			ry->tx_irq_on = true;
++		} else if (!want && ry->tx_irq_on) {
++			disable_irq_nosync(ry->irq[1]);
++			ry->tx_irq_on = false;
++		}
++	}
 +}
 +
 +static void ry_uart_service(struct uart_port *port)
@@ -346,6 +392,17 @@ index 000000000..91be529ba
 +				 ry_rd(port, RY_UART_ENABLE));
 +		}
 +	}
++	if (pinmux && ry->mux) {
++		/* bc02_uart1 FUN_8018c554, in this order */
++		writel(0x10000000, ry->mux + RY_MUX_864);
++		writel(0x60000000, ry->mux + RY_MUX_868);
++		writel(6, ry->mux + RY_MUX_878);
++		writel(1, ry->mux + RY_MUX_874);
++		writel(0x600, ry->mux + RY_MUX_878);
++		writel(0x100, ry->mux + RY_MUX_874);
++		dev_info(port->dev, "pads to uart mode: +868 %08x +870 %08x\n",
++			 readl(ry->mux + RY_MUX_868), readl(ry->mux + RY_MUX_870));
++	}
 +	/* masked since probe; drop anything latched before we listen */
 +	ry_wr(port, RY_UART_IRQ_MASK, 0);
 +	ry_wr(port, RY_UART_IRQ_CLEAR, ~0U);
@@ -355,6 +412,9 @@ index 000000000..91be529ba
 +		return 0;
 +	}
 +	for (i = 0; i < ry->nirq; i++) {
++		/* the tx line stays off until there is something to send */
++		if (i == 1)
++			irq_set_status_flags(ry->irq[i], IRQ_NOAUTOEN);
 +		ret = request_irq(ry->irq[i], ry_uart_isr, 0,
 +				  dev_name(port->dev), port);
 +		if (ret) {
@@ -363,7 +423,8 @@ index 000000000..91be529ba
 +			return ret;
 +		}
 +	}
-+	ry_wr(port, RY_UART_IRQ_MASK, RY_UART_IRQ_ALL);
++	ry->tx_irq_on = false;
++	ry_wr(port, RY_UART_IRQ_MASK, irq_mask);
 +	return 0;
 +}
 +
@@ -377,6 +438,10 @@ index 000000000..91be529ba
 +	if (ry->poll_on) {
 +		hrtimer_cancel(&ry->poll_timer);
 +		return;
++	}
++	if (ry->nirq > 1 && ry->tx_irq_on) {
++		disable_irq_nosync(ry->irq[1]);
++		ry->tx_irq_on = false;
 +	}
 +	for (i = 0; i < ry->nirq; i++)
 +		free_irq(ry->irq[i], port);
@@ -502,6 +567,11 @@ index 000000000..91be529ba
 +	ry->clk = devm_clk_get_optional_enabled(dev, NULL);
 +	if (IS_ERR(ry->clk))
 +		return dev_err_probe(dev, PTR_ERR(ry->clk), "clock\n");
++
++	/* not request_mem_region: the gpio driver owns this block too */
++	ry->mux = devm_ioremap(dev, RY_MUX_BASE, RY_MUX_LEN);
++	if (!ry->mux)
++		dev_warn(dev, "no pin mux mapping, pads left as they are\n");
 +
 +	ry->poll_on = poll_us != 0;
 +	if (ry->poll_on) {

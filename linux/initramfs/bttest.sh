@@ -2,8 +2,11 @@
 # bttest: the N8's bluetooth (CSR BlueCore on the rapuyama uart, kernel patch
 # 0015 -> /dev/ttyRY0, then hci_uart).
 #
-#   bttest            attach with bcsp, show the controller, scan
-#   bttest h4         attach with h4 instead (bcsp is what BC02 normally uses)
+#   bttest            attach with h4, show the controller, scan
+#   bttest bcsp       attach with bcsp instead
+#
+# The ROM has h4plushciv2_* and no bcsp module, so the transport is H4
+# (work/bt-n8/NOTES.md section 6); bcsp was the wrong first guess.
 #   bttest none       set the port up but don't attach, for poking at it by hand
 #
 # NOENABLE=1 leaves the uart block alone if Symbian left it off,
@@ -13,7 +16,7 @@
 # clock and pin mux come from there), and n8boot's wlan step on, which also
 # turns on the clock BT shares with the WL1271 reference (PRM 0x25 / gate 0x1a).
 # capture the whole output.
-PROTO="${1:-bcsp}"
+PROTO="${1:-h4}"
 RST=566	# genio54, bt reset  (gpiochip base 512 + 54)
 WAKE=565	# genio53, bt wake
 DEV=/dev/ttyRY0
@@ -26,6 +29,11 @@ dmesg | grep -iE "rapuyama_uart|ttyRY" || echo "  (nothing: SERIAL_RAPUYAMA not 
 ls -l "$DEV"
 
 # devmem, not physdump: physdump wants a 4 KB aligned address and these are not
+say "pin mux (bc02_uart1 power-on writes 864=0x10000000 868=0x60000000 874=0x100 878=0x600)"
+for a in 20031864 20031868 20031870 20031874 20031878 2003187c; do
+	printf '  0x%s = %s\n' "$a" "$(devmem 0x$a 32 2>/dev/null)"
+done
+
 say "uart registers (04 lock, 34 irq status, 38 irq mask, 84 enable, 9c busy, a0 tx room, 2c rx level)"
 for off in 04 2c 34 38 84 9c a0; do
 	printf '  +0x%s = %s\n' "$off" "$(devmem $((0x20025a00 + 0x$off)) 32 2>/dev/null)"
