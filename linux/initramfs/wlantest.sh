@@ -103,7 +103,7 @@ if [ -n "$SSID" ]; then
 	done
 	dmesg -c | grep -v videocore
 	[ "$st" = COMPLETED ] || { echo "not connected"; exit 1; }
-	udhcpc -i wlan0 -n -q
+	udhcpc -i wlan0 -n -q -s /usr/share/udhcpc/default.script
 	ip addr show wlan0
 	ping -c 4 1.1.1.1
 fi

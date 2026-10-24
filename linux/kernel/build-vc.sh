@@ -73,6 +73,8 @@ done
 	printf 'file /usr/bin/spitest %s 755 0 0\n' "$HERE/../initramfs/spitest.sh"
 	printf 'file /usr/bin/vadump %s 755 0 0\n' "$KOUT/rootfs-extra/vadump"
 	printf 'file /usr/bin/swdvadump %s 755 0 0\n' "$HERE/../initramfs/swdvadump.sh"
+	printf 'dir /usr/share/udhcpc 755 0 0\n'
+	printf 'file /usr/share/udhcpc/default.script %s 755 0 0\n' "$HERE/../initramfs/udhcpc.script"
 	printf 'file /usr/bin/khrntest %s 755 0 0\n' "$KOUT/vc-khrn/khrntest"
 	printf 'file /usr/bin/vctri %s 755 0 0\n' "$KOUT/vc-khrn/vctri"
 	printf 'file /usr/lib/libvcgl.so %s 755 0 0\n' "$KOUT/vc-khrn/libvcgl.so"
