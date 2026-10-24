@@ -104,6 +104,7 @@ done
 	printf 'file /etc/e6-check.sh %s 755 0 0\n' "$HERE/../initramfs/e6-check.sh"
 	printf 'file /etc/fonts/local.conf %s 644 0 0\n' "$HERE/../initramfs/fonts-local.conf"
 	printf 'file /usr/bin/wlantest %s 755 0 0\n' "$HERE/../initramfs/wlantest.sh"
+	printf 'file /usr/bin/bttest %s 755 0 0\n' "$HERE/../initramfs/bttest.sh"
 	# WLAN=1: n8 WLAN firmware from WLAN_FW (default work/wlan/fw), TI's only,
 	# never an NVS (per phone: n8boot + nvsget, see the top)
 	if [ "${WLAN:-}" = 1 ]; then
@@ -138,6 +139,12 @@ done
 	--enable NEW_LEDS --enable LEDS_CLASS --enable LEDS_CLASS_MULTICOLOR \
 	--enable LEDS_LP55XX_COMMON --enable LEDS_LP5521 \
 	--enable SPI --enable SPI_RAPUYAMA --enable SPI_SPIDEV
+# bluetooth: the rapuyama uart + hci_uart. The N8's chip is a CSR BlueCore
+# (BC02.LDD), which carries its own firmware, so BCSP/H4 is all that is needed
+"$KSRC/scripts/config" --file "$KOUT/.config" \
+	--enable SERIAL_RAPUYAMA --enable BT --enable BT_BREDR --enable BT_RFCOMM \
+	--enable BT_HCIUART --enable BT_HCIUART_SERDEV \
+	--enable BT_HCIUART_H4 --enable BT_HCIUART_BCSP
 # WLAN=1: the n8's TI WL1271 (wlcore over spi-rapuyama)
 [ "${WLAN:-}" = 1 ] && "$KSRC/scripts/config" --file "$KOUT/.config" \
 	--enable WLAN_VENDOR_TI --enable WLCORE --enable WLCORE_SPI --enable WL12XX

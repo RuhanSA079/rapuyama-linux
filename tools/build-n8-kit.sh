@@ -84,6 +84,7 @@ done
 	printf 'file /usr/bin/vadump %s 755 0 0\n' "$KOUT/rootfs-extra/vadump"
 	printf 'file /usr/bin/nvsget %s 755 0 0\n' "$KOUT/rootfs-extra/nvsget"
 	printf 'file /usr/bin/swdvadump %s 755 0 0\n' "$ROOT/linux/initramfs/swdvadump.sh"
+	printf 'file /usr/bin/bttest %s 755 0 0\n' "$ROOT/linux/initramfs/bttest.sh"
 	printf 'dir /usr/share 755 0 0\ndir /usr/share/udhcpc 755 0 0\n'
 	printf 'file /usr/share/udhcpc/default.script %s 755 0 0\n' "$ROOT/linux/initramfs/udhcpc.script"
 } >> "$KOUT/initramfs.list"

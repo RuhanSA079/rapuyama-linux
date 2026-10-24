@@ -1,0 +1,526 @@
+---
+ drivers/tty/serial/Kconfig         |  10 +
+ drivers/tty/serial/Makefile        |   1 +
+ drivers/tty/serial/rapuyama_uart.c | 414 ++++++++++
+ 3 files changed, 425 insertions(+)
+ create mode 100644 drivers/tty/serial/rapuyama_uart.c
+
+diff --git a/drivers/tty/serial/Kconfig b/drivers/tty/serial/Kconfig
+index 795518580..67eeb5eeb 100644
+--- a/drivers/tty/serial/Kconfig
++++ b/drivers/tty/serial/Kconfig
+@@ -84,6 +84,16 @@ config SERIAL_RAPUYAMA_EARLYCON
+ 	  phones (N8/E6/E7/C7), for bring-up over the BT uart test pads.
+ 	  Use "earlycon=rapuyama,0x20025a00,115200 keep_bootcon".
+ 
++config SERIAL_RAPUYAMA
++	tristate "Nokia RapuYama UART"
++	depends on ARCH_RAPUYAMA || COMPILE_TEST
++	select SERIAL_CORE
++	help
++	  The uart of the Nokia RapuYama phones (N8/E6/E7/C7), the port the
++	  bluetooth chip (a CSR BlueCore) hangs off. Needed for bluetooth:
++	  attach hci_uart to /dev/ttyRY0. Power, clock and pin mux come from
++	  Symbian, so bluetooth has to be on before Linux is started.
++
+ config SERIAL_EARLYCON_SEMIHOST
+ 	bool "Early console using Arm compatible semihosting"
+ 	depends on ARM64 || ARM || RISCV
+diff --git a/drivers/tty/serial/Makefile b/drivers/tty/serial/Makefile
+index 6954aa468..766288a3a 100644
+--- a/drivers/tty/serial/Makefile
++++ b/drivers/tty/serial/Makefile
+@@ -9,6 +9,7 @@ serial_base-y := serial_core.o serial_base_bus.o serial_ctrl.o serial_port.o
+ obj-$(CONFIG_SERIAL_EARLYCON) += earlycon.o
+ obj-$(CONFIG_SERIAL_EARLYCON_SEMIHOST) += earlycon-semihost.o
+ obj-$(CONFIG_SERIAL_RAPUYAMA_EARLYCON) += rapuyama_earlycon.o
++obj-$(CONFIG_SERIAL_RAPUYAMA) += rapuyama_uart.o
+ obj-$(CONFIG_SERIAL_EARLYCON_RISCV_SBI) += earlycon-riscv-sbi.o
+ 
+ # These Sparc drivers have to appear before others such as 8250
+diff --git a/drivers/tty/serial/rapuyama_uart.c b/drivers/tty/serial/rapuyama_uart.c
+new file mode 100644
+index 000000000..1577440f7
+--- /dev/null
++++ b/drivers/tty/serial/rapuyama_uart.c
+@@ -0,0 +1,477 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Nokia RapuYama UART (N8/E6/E7/C7), the port the bluetooth chip hangs off
++ * (a CSR BlueCore, BC02.LDD / bc02_uart1.PDD in the firmware).
++ *
++ * No public documentation: the register map comes from bc02_uart1.PDD, see
++ * docs/driver-re.md "UART block". The early console in rapuyama_earlycon.c
++ * uses the same block and the same baud arithmetic.
++ *
++ * Two things the firmware notes warn about shape this driver:
++ *
++ * - Reconfiguring the block is what faulted during probing, so by default
++ *   the line is left exactly as Symbian set it up and set_termios only
++ *   reports the speed back. reconfigure=1 lets it write the baud registers.
++ * - The N8's gpio interrupts never reach the CPU. These are direct intc
++ *   lines (99 and 101) so they ought to be fine, but poll_us=N falls back to
++ *   a timer if they turn out not to fire, which is how the spi, gpio and
++ *   wlcore drivers on this phone cope.
++ *
++ * Power, clock and pin mux come from Symbian: bluetooth has to be on before
++ * Linux is started (or n8boot has to switch it on at the handoff).
++ */
++
++#include <linux/clk.h>
++#include <linux/console.h>
++#include <linux/hrtimer.h>
++#include <linux/interrupt.h>
++#include <linux/io.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/serial_core.h>
++#include <linux/tty_flip.h>
++#include <linux/kfifo.h>
++
++#define RY_UART_LOCK		0x04	/* 1 while configuring, 0 after */
++#define RY_UART_DIV_A		0x08
++#define RY_UART_DIV_B		0x0c
++#define RY_UART_DIV_C		0x10
++#define RY_UART_BITS		0x14	/* 7 = 8 data bits, 6 = 7 */
++#define RY_UART_PARITY		0x18
++#define RY_UART_PARITY_TYPE	0x1c
++#define RY_UART_IRQ_CLEAR	0x28	/* write ~0 */
++#define RY_UART_RX_LEVEL	0x2c	/* words waiting in the rx fifo */
++#define RY_UART_IRQ_STATUS	0x34	/* bits 0..3 */
++#define RY_UART_IRQ_MASK	0x38
++#define RY_UART_SPECIAL		0x3c
++#define RY_UART_DIV_D		0x5c
++#define RY_UART_FRAC_A		0x60
++#define RY_UART_RX		0x64	/* data in 0..7, errors in 8..11 */
++#define RY_UART_ENABLE		0x84	/* 3 = tx + rx */
++#define RY_UART_DIV_Q1		0x88
++#define RY_UART_DIV_Q		0x8c
++#define RY_UART_BUSY		0x9c
++#define RY_UART_TX_ROOM		0xa0	/* non-zero = room in the tx fifo */
++#define RY_UART_TX		0xa4
++#define RY_UART_FRAC_B		0xb8
++
++#define RY_UART_REF		38400000u
++#define RY_UART_BITS_8		7
++#define RY_UART_TX_RX_ON	3
++#define RY_UART_IRQ_ALL		0x1e	/* the mask the firmware uses */
++#define RY_UART_RX_ERRORS	0xf00
++
++#define RY_UART_NR		1
++#define RY_UART_FIFO		16	/* assumed, only bounds a tx burst */
++
++static uint poll_us;
++module_param(poll_us, uint, 0444);
++MODULE_PARM_DESC(poll_us, "service the port from a timer every N us instead of on the irq (0 = irq)");
++
++static bool reconfigure;
++module_param(reconfigure, bool, 0644);
++MODULE_PARM_DESC(reconfigure, "let set_termios write the baud registers (the firmware notes say reconfiguring can fault)");
++
++struct ry_uart {
++	struct uart_port port;
++	struct clk *clk;
++	struct hrtimer poll_timer;
++	ktime_t poll_period;
++	bool poll_on;
++	bool tx_stopped;
++};
++
++static inline struct ry_uart *to_ry(struct uart_port *port)
++{
++	return container_of(port, struct ry_uart, port);
++}
++
++static inline u32 ry_rd(struct uart_port *port, u32 reg)
++{
++	return readl(port->membase + reg);
++}
++
++static inline void ry_wr(struct uart_port *port, u32 reg, u32 val)
++{
++	writel(val, port->membase + reg);
++}
++
++/* the firmware's own baud arithmetic, same as the early console */
++static void ry_uart_set_baud(struct uart_port *port, u32 baud)
++{
++	u32 q = RY_UART_REF / baud;
++	u32 r = RY_UART_REF % baud;
++	u32 r2 = RY_UART_REF % (baud << 1);
++	u32 a = (q - 3) >> 1;
++
++	if (baud == 921600)
++		ry_wr(port, RY_UART_SPECIAL, 0);
++	else if (baud == 120000)
++		ry_wr(port, RY_UART_SPECIAL, 0x7fffff);
++
++	ry_wr(port, RY_UART_DIV_A, a);
++	ry_wr(port, RY_UART_DIV_D, a / 5);
++	ry_wr(port, RY_UART_DIV_B, a + 1);
++	ry_wr(port, RY_UART_DIV_C, a);
++	ry_wr(port, RY_UART_DIV_Q1, q - 1);
++	ry_wr(port, RY_UART_DIV_Q, q);
++	ry_wr(port, RY_UART_FRAC_A, r2 * (0x80000000u / baud) - 0x80000000u);
++	ry_wr(port, RY_UART_FRAC_B, r * (0x80000000u / (baud >> 1)));
++}
++
++/* drain the rx fifo into the tty; caller holds the port lock */
++static void ry_uart_rx(struct uart_port *port)
++{
++	unsigned int n = 0;
++
++	while (ry_rd(port, RY_UART_RX_LEVEL)) {
++		u32 v = ry_rd(port, RY_UART_RX);
++		u8 ch = v & 0xff;
++		u8 flag = TTY_NORMAL;
++
++		port->icount.rx++;
++		if (v & RY_UART_RX_ERRORS) {
++			if (v & BIT(8))
++				port->icount.parity++;
++			if (v & BIT(9))
++				port->icount.frame++;
++			if (v & BIT(10))
++				port->icount.overrun++;
++			if (v & BIT(11))
++				port->icount.brk++;
++			flag = TTY_BREAK;
++		}
++		if (uart_handle_sysrq_char(port, ch))
++			continue;
++		uart_insert_char(port, v, BIT(10), ch, flag);
++		/* a stuck level register must not wedge the cpu */
++		if (++n > PAGE_SIZE)
++			break;
++	}
++	if (n)
++		tty_flip_buffer_push(&port->state->port);
++}
++
++/* push what fits into the tx fifo; caller holds the port lock */
++static void ry_uart_tx(struct uart_port *port)
++{
++	struct ry_uart *ry = to_ry(port);
++	struct tty_port *tport = &port->state->port;
++	unsigned int n = RY_UART_FIFO;
++	u8 ch;
++
++	if (port->x_char) {
++		if (ry_rd(port, RY_UART_TX_ROOM)) {
++			ry_wr(port, RY_UART_TX, port->x_char);
++			port->icount.tx++;
++			port->x_char = 0;
++		}
++		return;
++	}
++	if (ry->tx_stopped || uart_tx_stopped(port))
++		return;
++	while (n-- && ry_rd(port, RY_UART_TX_ROOM) &&
++	       uart_fifo_get(port, &ch)) {
++		ry_wr(port, RY_UART_TX, ch);
++		port->icount.tx++;
++	}
++	if (kfifo_len(&tport->xmit_fifo) < WAKEUP_CHARS)
++		uart_write_wakeup(port);
++}
++
++static void ry_uart_service(struct uart_port *port)
++{
++	ry_uart_rx(port);
++	ry_uart_tx(port);
++}
++
++static irqreturn_t ry_uart_isr(int irq, void *dev_id)
++{
++	struct uart_port *port = dev_id;
++	unsigned long flags;
++	u32 status;
++
++	uart_port_lock_irqsave(port, &flags);
++	status = ry_rd(port, RY_UART_IRQ_STATUS);
++	/* ack first: a status we cannot clear would storm */
++	ry_wr(port, RY_UART_IRQ_CLEAR, ~0U);
++	ry_uart_service(port);
++	if (ry_rd(port, RY_UART_IRQ_STATUS) & status) {
++		ry_wr(port, RY_UART_IRQ_MASK, 0);
++		dev_err(port->dev, "irq %d status %08x will not clear, masking\n",
++			irq, status);
++	}
++	uart_port_unlock_irqrestore(port, flags);
++	return status ? IRQ_HANDLED : IRQ_NONE;
++}
++
++static enum hrtimer_restart ry_uart_poll(struct hrtimer *t)
++{
++	struct ry_uart *ry = container_of(t, struct ry_uart, poll_timer);
++	unsigned long flags;
++
++	uart_port_lock_irqsave(&ry->port, &flags);
++	ry_uart_service(&ry->port);
++	uart_port_unlock_irqrestore(&ry->port, flags);
++	hrtimer_forward_now(t, ry->poll_period);
++	return HRTIMER_RESTART;
++}
++
++static unsigned int ry_uart_tx_empty(struct uart_port *port)
++{
++	return ry_rd(port, RY_UART_BUSY) ? 0 : TIOCSER_TEMT;
++}
++
++static void ry_uart_start_tx(struct uart_port *port)
++{
++	to_ry(port)->tx_stopped = false;
++	ry_uart_tx(port);
++}
++
++static void ry_uart_stop_tx(struct uart_port *port)
++{
++	to_ry(port)->tx_stopped = true;
++}
++
++static void ry_uart_stop_rx(struct uart_port *port)
++{
++	ry_wr(port, RY_UART_IRQ_MASK, 0);
++}
++
++/* no modem control lines are wired out of this block */
++static unsigned int ry_uart_get_mctrl(struct uart_port *port)
++{
++	return TIOCM_CTS | TIOCM_DSR | TIOCM_CAR;
++}
++
++static void ry_uart_set_mctrl(struct uart_port *port, unsigned int mctrl)
++{
++}
++
++static void ry_uart_break_ctl(struct uart_port *port, int ctl)
++{
++}
++
++static int ry_uart_startup(struct uart_port *port)
++{
++	struct ry_uart *ry = to_ry(port);
++
++	ry->tx_stopped = false;
++	/* Symbian left the block enabled; say so rather than reconfigure it */
++	if (!(ry_rd(port, RY_UART_ENABLE) & RY_UART_TX_RX_ON))
++		dev_warn(port->dev, "tx/rx not enabled (%08x), bluetooth off in symbian?\n",
++			 ry_rd(port, RY_UART_ENABLE));
++	ry_wr(port, RY_UART_IRQ_CLEAR, ~0U);
++	if (ry->poll_on) {
++		hrtimer_start(&ry->poll_timer, ry->poll_period,
++			      HRTIMER_MODE_REL);
++		return 0;
++	}
++	ry_wr(port, RY_UART_IRQ_MASK, RY_UART_IRQ_ALL);
++	return 0;
++}
++
++static void ry_uart_shutdown(struct uart_port *port)
++{
++	struct ry_uart *ry = to_ry(port);
++
++	ry_wr(port, RY_UART_IRQ_MASK, 0);
++	ry_wr(port, RY_UART_IRQ_CLEAR, ~0U);
++	if (ry->poll_on)
++		hrtimer_cancel(&ry->poll_timer);
++}
++
++static void ry_uart_set_termios(struct uart_port *port, struct ktermios *new,
++				const struct ktermios *old)
++{
++	unsigned long flags;
++	u32 baud;
++
++	baud = uart_get_baud_rate(port, new, old, 1200, RY_UART_REF / 16);
++	if (!baud)
++		baud = port->uartclk ? port->uartclk : 115200;
++
++	uart_port_lock_irqsave(port, &flags);
++	if (reconfigure) {
++		unsigned int spin = 100000;
++
++		while (ry_rd(port, RY_UART_BUSY) && --spin)
++			cpu_relax();
++		ry_wr(port, RY_UART_LOCK, 1);
++		ry_wr(port, RY_UART_BITS, RY_UART_BITS_8);
++		ry_wr(port, RY_UART_PARITY, 0);
++		ry_wr(port, RY_UART_PARITY_TYPE, 0);
++		ry_uart_set_baud(port, baud);
++		ry_wr(port, RY_UART_LOCK, 0);
++	} else {
++		/* the line stays as the firmware set it up */
++		baud = port->uartclk ? port->uartclk : baud;
++	}
++	uart_update_timeout(port, new->c_cflag, baud);
++	uart_port_unlock_irqrestore(port, flags);
++
++	tty_termios_encode_baud_rate(new, baud, baud);
++}
++
++static const char *ry_uart_type(struct uart_port *port)
++{
++	return "rapuyama";
++}
++
++static void ry_uart_config_port(struct uart_port *port, int flags)
++{
++	if (flags & UART_CONFIG_TYPE)
++		port->type = PORT_GENERIC;
++}
++
++static int ry_uart_verify_port(struct uart_port *port, struct serial_struct *s)
++{
++	return -EINVAL;
++}
++
++static void ry_uart_release_port(struct uart_port *port)
++{
++}
++
++static int ry_uart_request_port(struct uart_port *port)
++{
++	return 0;
++}
++
++static const struct uart_ops ry_uart_ops = {
++	.tx_empty	= ry_uart_tx_empty,
++	.set_mctrl	= ry_uart_set_mctrl,
++	.get_mctrl	= ry_uart_get_mctrl,
++	.stop_tx	= ry_uart_stop_tx,
++	.start_tx	= ry_uart_start_tx,
++	.stop_rx	= ry_uart_stop_rx,
++	.break_ctl	= ry_uart_break_ctl,
++	.startup	= ry_uart_startup,
++	.shutdown	= ry_uart_shutdown,
++	.set_termios	= ry_uart_set_termios,
++	.type		= ry_uart_type,
++	.release_port	= ry_uart_release_port,
++	.request_port	= ry_uart_request_port,
++	.config_port	= ry_uart_config_port,
++	.verify_port	= ry_uart_verify_port,
++};
++
++static struct uart_driver ry_uart_driver = {
++	.owner		= THIS_MODULE,
++	.driver_name	= "rapuyama_uart",
++	.dev_name	= "ttyRY",
++	.nr		= RY_UART_NR,
++};
++
++static int ry_uart_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct ry_uart *ry;
++	struct resource *res;
++	u32 speed = 115200;
++	int ret, irq, i;
++
++	ry = devm_kzalloc(dev, sizeof(*ry), GFP_KERNEL);
++	if (!ry)
++		return -ENOMEM;
++
++	ry->port.membase = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
++	if (IS_ERR(ry->port.membase))
++		return PTR_ERR(ry->port.membase);
++	ry->port.mapbase = res->start;
++	ry->port.dev = dev;
++	ry->port.type = PORT_GENERIC;
++	ry->port.iotype = UPIO_MEM;
++	ry->port.ops = &ry_uart_ops;
++	ry->port.fifosize = RY_UART_FIFO;
++	ry->port.flags = UPF_BOOT_AUTOCONF;
++	ry->port.line = 0;
++	of_property_read_u32(dev->of_node, "current-speed", &speed);
++	ry->port.uartclk = speed;
++
++	/* Symbian has it on already; take a reference so nothing turns it off */
++	ry->clk = devm_clk_get_optional_enabled(dev, NULL);
++	if (IS_ERR(ry->clk))
++		return dev_err_probe(dev, PTR_ERR(ry->clk), "clock\n");
++
++	ry->poll_on = poll_us != 0;
++	if (ry->poll_on) {
++		ry->poll_period = ns_to_ktime((u64)poll_us * NSEC_PER_USEC);
++		hrtimer_init(&ry->poll_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
++		ry->poll_timer.function = ry_uart_poll;
++		ry->port.irq = 0;
++	} else {
++		irq = platform_get_irq(pdev, 0);
++		if (irq < 0)
++			return irq;
++		ry->port.irq = irq;
++		/* the block raises two lines (99 and 101); which is rx and
++		 * which is tx is not known, so both run the same handler
++		 */
++		for (i = 0; (irq = platform_get_irq_optional(pdev, i)) > 0; i++) {
++			ret = devm_request_irq(dev, irq, ry_uart_isr, 0,
++					       dev_name(dev), &ry->port);
++			if (ret)
++				return dev_err_probe(dev, ret, "irq %d\n", irq);
++		}
++	}
++
++	platform_set_drvdata(pdev, ry);
++	ret = uart_add_one_port(&ry_uart_driver, &ry->port);
++	if (ret)
++		return dev_err_probe(dev, ret, "add port\n");
++
++	dev_info(dev, "ttyRY0 at %pa, %u baud (%s), line left as the firmware set it%s\n",
++		 &res->start, speed,
++		 ry->poll_on ? "polled" : "irq", reconfigure ? " (reconfigure=1)" : "");
++	return 0;
++}
++
++static void ry_uart_remove(struct platform_device *pdev)
++{
++	struct ry_uart *ry = platform_get_drvdata(pdev);
++
++	uart_remove_one_port(&ry_uart_driver, &ry->port);
++	if (ry->poll_on)
++		hrtimer_cancel(&ry->poll_timer);
++}
++
++static const struct of_device_id ry_uart_match[] = {
++	{ .compatible = "nokia,rapuyama-uart" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, ry_uart_match);
++
++static struct platform_driver ry_uart_platform_driver = {
++	.probe	= ry_uart_probe,
++	.remove	= ry_uart_remove,
++	.driver	= {
++		.name		= "rapuyama_uart",
++		.of_match_table	= ry_uart_match,
++	},
++};
++
++static int __init ry_uart_init(void)
++{
++	int ret = uart_register_driver(&ry_uart_driver);
++
++	if (ret)
++		return ret;
++	ret = platform_driver_register(&ry_uart_platform_driver);
++	if (ret)
++		uart_unregister_driver(&ry_uart_driver);
++	return ret;
++}
++
++static void __exit ry_uart_exit(void)
++{
++	platform_driver_unregister(&ry_uart_platform_driver);
++	uart_unregister_driver(&ry_uart_driver);
++}
++
++module_init(ry_uart_init);
++module_exit(ry_uart_exit);
++
++MODULE_DESCRIPTION("Nokia RapuYama UART");
++MODULE_LICENSE("GPL");
+-- 
+2.43.0
+

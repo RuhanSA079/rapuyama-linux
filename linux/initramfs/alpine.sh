@@ -2,7 +2,8 @@
 # alpine armhf userspace for the initramfs: weston (drm backend, pixman
 # renderer, desktop shell) + weston-terminal + seatd. alpine armhf = armv6
 # + vfp hard float = exactly the e6's arm1176, so the stock packages run.
-# iw + wpa_supplicant for the n8's WLAN (wlcore).
+# iw + wpa_supplicant for the n8's WLAN (wlcore), bluez for its bluetooth
+# (CSR BlueCore on the rapuyama uart).
 # installed on the pc with the static x86_64 apk (no qemu, no root), then
 # pruned to what the programs really load (tools/prune_rootfs.py), ~26 MB.
 # the result is cached in work/rootfs-alpine, delete it to rebuild
@@ -19,12 +20,15 @@ APK="$DL/apkt/sbin/apk.static"
 MIRROR=https://dl-cdn.alpinelinux.org/alpine
 REL=v3.24
 PKGS="busybox musl alpine-keys weston weston-backend-drm weston-shell-desktop
-weston-terminal seatd libudev-zero font-hack foot iw wpa_supplicant"
+weston-terminal seatd libudev-zero font-hack foot iw wpa_supplicant
+bluez bluez-deprecated"
 # what has to keep working after the prune
 ROOTS="usr/bin/weston usr/bin/weston-terminal usr/bin/seatd usr/bin/foot
 usr/libexec/weston-desktop-shell usr/libexec/weston-keyboard
 usr/lib/weston/desktop-shell.so usr/lib/libweston-14/drm-backend.so
-lib/ld-musl-armhf.so.1 usr/sbin/iw sbin/wpa_supplicant sbin/wpa_cli"
+lib/ld-musl-armhf.so.1 usr/sbin/iw sbin/wpa_supplicant sbin/wpa_cli
+usr/bin/btattach usr/bin/bluetoothctl usr/bin/hciconfig usr/bin/hcitool
+usr/lib/bluetooth/bluetoothd"
 
 # stamp next to the dir, not in it (all of it goes into the initramfs)
 [ -e "$OUT.done" ] && exit 0
