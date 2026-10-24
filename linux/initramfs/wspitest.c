@@ -18,7 +18,10 @@
  *
  * WSPI words are 32 bit, MSB first on the wire. This tool uses 8 bit spidev
  * transfers and builds the byte order itself, so the controller's 32 bit
- * handling is not involved. Prints every byte it gets back.
+ * handling is not involved. The RapuYama controller is half duplex (like
+ * wlcore's own traffic): writes are tx-only transfers, the chip id read is
+ * a tx transfer (command) followed by an rx transfer under one chip
+ * select. Prints every byte it gets back.
  *
  * Build: arm-linux-gnu-gcc -march=armv6k -marm -static -nostdlib -O2 \
  *          -I linux/initramfs -o wspitest work/spi-n8/wspitest.c
@@ -44,6 +47,7 @@ struct spi_ioc_transfer {
 };
 
 #define SPI_IOC_MESSAGE_1 0x40206b00u	/* _IOW('k', 0, char[32]) */
+#define SPI_IOC_MESSAGE_2 0x40406b00u	/* _IOW('k', 0, char[64]) */
 #define SPI_IOC_WR_MODE 0x40016b01u
 #define SPI_IOC_WR_BITS 0x40016b03u
 #define SPI_IOC_WR_SPEED 0x40046b04u
@@ -94,19 +98,27 @@ static void set_mode(u8 mode)
 		fail("wspitest: can't set the spi mode\n");
 }
 
-/* one chip select assertion, len bytes out of txb, into rxb */
-static void xfer(const char *what, u32 len)
+/*
+ * one chip select assertion: txlen bytes out of txb, then (if rxlen) rxlen
+ * bytes into rxb
+ */
+static void xfer(const char *what, u32 txlen, u32 rxlen)
 {
-	struct spi_ioc_transfer t = { 0 };
-	u32 i;
+	struct spi_ioc_transfer t[2] = { { 0 }, { 0 } };
+	u32 i, len = rxlen;
 	s32 r;
 
-	t.tx_buf = (u32)txb;
-	t.rx_buf = (u32)rxb;
-	t.len = len;
-	t.speed_hz = hz;
-	t.bits_per_word = 8;
-	r = (s32)syscall3(SYS_ioctl, fd, SPI_IOC_MESSAGE_1, (u32)&t);
+	t[0].tx_buf = (u32)txb;
+	t[0].len = txlen;
+	t[0].speed_hz = hz;
+	t[0].bits_per_word = 8;
+	t[1].rx_buf = (u32)rxb;
+	t[1].len = rxlen;
+	t[1].speed_hz = hz;
+	t[1].bits_per_word = 8;
+	memset(rxb, 0, sizeof(rxb));
+	r = (s32)syscall3(SYS_ioctl, fd,
+			  rxlen ? SPI_IOC_MESSAGE_2 : SPI_IOC_MESSAGE_1, (u32)t);
 	puts_(what);
 	if (r < 0) {
 		puts_(": ioctl failed ");
@@ -153,7 +165,7 @@ static void write32(u32 addr, u32 val)
 {
 	put_be32(txb, WSPI_LEN(4) | WSPI_ADDR(addr));
 	put_be32(txb + 4, val);
-	xfer("  write", 8);
+	xfer("  write", 8, 0);
 }
 
 void __attribute__((naked)) _start(void)
@@ -191,7 +203,7 @@ void main_args(u32 *sp)
 
 	/* 1. reset */
 	memset(txb, 0xff, 8);
-	xfer("reset", 8);
+	xfer("reset", 8, 0);
 
 	/* 2. init: ff ff 40 00 00 00 79 crc|1 (fixed busy off, 0 busy words) */
 	txb[0] = 0xff;
@@ -202,10 +214,10 @@ void main_args(u32 *sp)
 	txb[5] = 0;
 	txb[6] = 0x40 | 0x20 | 0x10 | 0x08 | 0x01;
 	txb[7] = crc7_be(txb + 2, 5) | 1;
-	xfer("init", 8);
+	xfer("init", 8, 0);
 	set_mode(SPI_CS_HIGH);
 	memset(txb, 0xff, 4);
-	xfer("extra clocks, cs high", 4);
+	xfer("extra clocks, cs high", 4, 0);
 	set_mode(0);
 
 	/* 3. + 4. */
@@ -217,8 +229,8 @@ void main_args(u32 *sp)
 	/* 5. command, then up to 7 busy / data words */
 	memset(txb, 0, sizeof(txb));
 	put_be32(txb, WSPI_READ | WSPI_LEN(4) | WSPI_ADDR(CHIP_ID_ADDR));
-	xfer("read chip id", 32);
-	for (i = 4; i + 8 <= 32; i += 4) {
+	xfer("read chip id", 4, 28);
+	for (i = 0; i + 8 <= 28; i += 4) {
 		if (rxb[i + 3] & 1) {	/* busy word bit 0 = ready */
 			found = (int)i;
 			id = get_be32(rxb + i + 4);
