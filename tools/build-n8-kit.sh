@@ -65,7 +65,7 @@ sed -E -e "s#^(file /bin/busybox ).*( 755 0 0)#\1$BB\2#" \
 	"$ROOT/linux/initramfs/initramfs.list" > "$KOUT/initramfs.list"
 
 # input / sensor test tools (linux/initramfs/{keytest,touchtest}.c, sensortest.sh)
-for t in keytest touchtest physdump fbtouch wspitest; do
+for t in keytest touchtest physdump fbtouch wspitest vadump; do
 	arm-linux-gnu-gcc -march=armv6k -marm -static -nostdlib -fno-pie -no-pie \
 		-ffreestanding -fno-builtin -fomit-frame-pointer -fno-stack-protector \
 		-Os -Wall -Wextra -Werror \
@@ -81,6 +81,8 @@ done
 	printf 'file /usr/bin/wspitest %s 755 0 0\n' "$KOUT/rootfs-extra/wspitest"
 	printf 'file /usr/bin/swddump %s 755 0 0\n' "$ROOT/linux/initramfs/swddump.sh"
 	printf 'file /usr/bin/spitest %s 755 0 0\n' "$ROOT/linux/initramfs/spitest.sh"
+	printf 'file /usr/bin/vadump %s 755 0 0\n' "$KOUT/rootfs-extra/vadump"
+	printf 'file /usr/bin/swdvadump %s 755 0 0\n' "$ROOT/linux/initramfs/swdvadump.sh"
 } >> "$KOUT/initramfs.list"
 
 echo ">> kernel"
