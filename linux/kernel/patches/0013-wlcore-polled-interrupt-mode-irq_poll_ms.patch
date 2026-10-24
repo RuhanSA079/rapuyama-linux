@@ -1,0 +1,108 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Ruhan van der Berg <35257374+RuhanSA079@users.noreply.github.com>
+Date: Sat, 24 Oct 2026 18:10:00 +0200
+Subject: [PATCH] wifi: wlcore: polled interrupt mode (irq_poll_ms)
+
+On the Nokia N8 the WL1271's interrupt line (genio73) doesn't reach the
+CPU: neither the intc line nor the polled gpio irqs (rising, falling or
+level low) deliver the firmware's events, so scans end with "Scan
+completed due to error" while the chip holds EVENT_A / DATA in its
+interrupt status (hint_sts 0x44 / 0x64).
+
+irq_poll_ms=N runs the threaded interrupt handler every N ms. It reads
+the chip's own interrupt status over the bus, so nothing is lost; with
+no bits set it costs one status read. It is skipped while the chip is in
+ELP, whose wakeup needs the chip's real signal (keep runtime PM off).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/net/wireless/ti/wlcore/ main.c   | 28 ++++++++++++++++++++++++++++
+ drivers/net/wireless/ti/wlcore/wlcore.h |  3 +++
+ 2 files changed, 30 insertions(+), 0 deletions(-)
+
+--- a/drivers/net/wireless/ti/wlcore/main.c
++++ b/drivers/net/wireless/ti/wlcore/main.c
+@@ -36,6 +36,7 @@
+ static int fwlog_mem_blocks = -1;
+ static int bug_on_recovery = -1;
+ static int no_recovery     = -1;
++static unsigned int irq_poll_ms;
+ 
+ static void __wl1271_op_remove_interface(struct wl1271 *wl,
+ 					 struct ieee80211_vif *vif,
+@@ -6568,6 +6569,27 @@
+ 	return IRQ_WAKE_THREAD;
+ }
+ 
++/*
++ * irq_poll_ms: run the threaded interrupt handler off a timer, for boards
++ * whose WLAN irq line does not reach the cpu (Nokia N8: the WL1271 irq on
++ * genio73 never raises its intc line). The handler reads the chip's own
++ * interrupt status over the bus, so polling it misses nothing; with no
++ * status bits set it only costs that read. Skipped while the chip is in
++ * ELP: completing the ELP wakeup needs the chip's real wake up signal.
++ */
++static void wlcore_irq_poll_work(struct work_struct *work)
++{
++	struct delayed_work *dwork = to_delayed_work(work);
++	struct wl1271 *wl = container_of(dwork, struct wl1271, irq_poll_work);
++
++	if (READ_ONCE(wl->state) == WLCORE_STATE_ON &&
++	    !test_bit(WL1271_FLAG_IN_ELP, &wl->flags) &&
++	    !test_bit(WL1271_FLAG_IRQ_RUNNING, &wl->flags))
++		wlcore_irq(wl->irq, wl);
++
++	schedule_delayed_work(dwork, msecs_to_jiffies(irq_poll_ms));
++}
++
+ static void wlcore_nvs_cb(const struct firmware *fw, void *context)
+ {
+ 	struct wl1271 *wl = context;
+@@ -6679,6 +6701,13 @@
+ 		goto out_unreg;
+ 
+ 	wl->initialized = true;
++
++	INIT_DELAYED_WORK(&wl->irq_poll_work, wlcore_irq_poll_work);
++	if (irq_poll_ms) {
++		wl1271_info("irq polled every %u ms", irq_poll_ms);
++		schedule_delayed_work(&wl->irq_poll_work,
++				      msecs_to_jiffies(irq_poll_ms));
++	}
+ 	goto out;
+ 
+ out_unreg:
+@@ -6837,6 +6866,8 @@
+ 	if (!wl->initialized)
+ 		return;
+ 
++	cancel_delayed_work_sync(&wl->irq_poll_work);
++
+ 	if (wl->wakeirq >= 0) {
+ 		dev_pm_clear_wake_irq(wl->dev);
+ 		wl->wakeirq = -ENODEV;
+@@ -6876,6 +6907,9 @@
+ module_param(no_recovery, int, 0600);
+ MODULE_PARM_DESC(no_recovery, "Prevent HW recovery. FW will remain stuck.");
+ 
++module_param(irq_poll_ms, uint, 0444);
++MODULE_PARM_DESC(irq_poll_ms, "run the interrupt handler every N ms (0 = off), for an irq line that doesn't reach the cpu");
++
+ MODULE_DESCRIPTION("TI WLAN core driver");
+ MODULE_LICENSE("GPL");
+ MODULE_AUTHOR("Luciano Coelho <coelho@ti.com>");
+--- a/drivers/net/wireless/ti/wlcore/wlcore.h
++++ b/drivers/net/wireless/ti/wlcore/wlcore.h
+@@ -411,6 +411,9 @@
+ 	/* work to fire when Tx is stuck */
+ 	struct delayed_work tx_watchdog_work;
+ 
++	/* irq_poll_ms: the interrupt handler run off a timer */
++	struct delayed_work irq_poll_work;
++
+ 	struct wlcore_ops *ops;
+ 	/* pointer to the lower driver partition table */
+ 	const struct wlcore_partition_set *ptable;
+-- 
+2.43.0
+
