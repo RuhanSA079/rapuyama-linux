@@ -1,0 +1,71 @@
+#!/bin/busybox sh
+# wlantest: the N8's TI WL1271 under wlcore (kernel with WLAN=1, n8-wlan.dtb):
+# probe, firmware boot, MAC, interrupts, then a scan. capture the output.
+#
+#   wlantest          probe + firmware + scan
+#   wlantest <ssid> <passphrase>
+#                     the same, then WPA2 connect + DHCP (busybox udhcpc)
+#
+# needs WLAN on in Symbian before the jump (the modem switches the WL1271's
+# 19.2 MHz reference clock). the firmware boot over the polled spi takes a
+# few seconds
+SSID="$1"
+PSK="$2"
+LOG=/tmp/wlantest.kmsg
+
+kmsg() { dmesg | grep -iE "wl1271|wlcore|wl12xx|spi|wlan|cfg80211|firmware" | grep -v videocore; }
+irqs() { grep -iE "wl|gpio.* 73" /proc/interrupts || echo "(no wlan irq line in /proc/interrupts)"; }
+
+echo "== kernel log so far"
+kmsg
+echo "== interface"
+ls /sys/class/net/
+[ -d /sys/class/net/wlan0 ] || { echo "no wlan0: wlcore didn't probe (log above)"; exit 1; }
+echo "== firmware files"
+ls -la /lib/firmware/ti-connectivity/
+
+echo "== irq before"
+irqs
+dmesg -c > /dev/null
+echo "== ip link set wlan0 up (loads the firmware)"
+ip link set wlan0 up
+echo "exit $?"
+sleep 2
+dmesg -c | tee $LOG | grep -v videocore
+echo "== irq after"
+irqs
+ip link show wlan0
+iw dev wlan0 info
+
+echo "== scan"
+iw dev wlan0 scan > /tmp/scan.txt 2>&1
+echo "exit $?"
+grep -E "^BSS|SSID:|signal:|freq:" /tmp/scan.txt | head -60
+dmesg -c | grep -v videocore
+echo "== irq after scan"
+irqs
+
+if [ -n "$SSID" ]; then
+	echo "== connect to $SSID"
+	mkdir -p /run/wpa
+	{
+		echo "ctrl_interface=/run/wpa"
+		echo "network={"
+		echo "	ssid=\"$SSID\""
+		echo "	psk=\"$PSK\""
+		echo "}"
+	} > /tmp/wpa.conf
+	wpa_supplicant -B -i wlan0 -D nl80211 -c /tmp/wpa.conf
+	for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+		sleep 2
+		st=$(wpa_cli -p /run/wpa -i wlan0 status | sed -n 's/^wpa_state=//p')
+		echo "  $st"
+		[ "$st" = COMPLETED ] && break
+	done
+	dmesg -c | grep -v videocore
+	[ "$st" = COMPLETED ] || { echo "not connected"; exit 1; }
+	udhcpc -i wlan0 -n -q
+	ip addr show wlan0
+	ping -c 4 1.1.1.1
+fi
+echo "== done"
