@@ -67,6 +67,19 @@
 	};
 };
 
+/* the N8's ISA software data (the security server behind the PA_SWD secure
+ * watchdog: token, heap, protected application table, stacks) is at VA
+ * 0xc6800000 +0x280000 = phys 0x1fd50000..0x1ffcffff (swdvadump 24.10.2026,
+ * via the L1 copy in the isah block), in ordinary linux ram: the E6's
+ * shm@1f8b0000 does not cover it. found intact early after boot (token 240,
+ * live heap, a PA_SWD request in the pool), keep linux off it. not no-map,
+ * same reason as the E6 nodes (a no-map hole near the top of ram) */
+&{/reserved-memory} {
+	isasw@1fd50000 {
+		reg = <0x1fd50000 0x280000>;
+	};
+};
+
 /* the startup mode word as 4th reg: rebootdriver.ldd sets bits 20-23 before
  * the soc reset. left at 0 the n8 powers off after a reboot instead of
  * booting Symbian, 0xe (normal restart) brings it back */
