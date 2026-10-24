@@ -19,7 +19,7 @@ State on 23.10.2026, Symbian Anna 024.001, `n8boot` loader, E6 kernel with the N
 | Timers, interrupts | RapuYama intc + timers | ✅ works | |
 | USB device: serial shell | MUSB + g_serial, `/dev/ttyACM*` on the PC | ✅ works | |
 | SoC + PMIC watchdog | `rapuyama-wdt` | ✅ works | |
-| Secure watchdog (PA_SWD) | modem / secure side | ✅ works | **24.10.2026: Linux pets it itself, the N8 no longer resets** (6 min run, 2 pets, timeout 240 s granted). Kernel patch 0014 adds an N8 row to the E6 bridge (`secure_wdt.c`); `secure_wdt_call.S` is unchanged. Opt in with `e6.swd=1` (`work/dts-test/n8-swd.dts`), not in the default `n8.dts` yet. ISA data VA 0xc6800000 = phys 0x1fd50000, reserved as `isasw@1fd50000`; alloc/free/pet c6361cb3 / c6361bad / c6362b63; token 240. Unlike the E6 there is no stopped task's stack to borrow, so it uses the top of a 60 KB all-zero run of the data region (`c68e0000`), re-checked clear at init. Details in `work/swd-n8/NOTES.md` §10 |
+| Secure watchdog (PA_SWD) | modem / secure side | ✅ works | **24.10.2026: Linux pets it itself, the N8 no longer resets** (6 min run, 2 pets, timeout 240 s granted). Kernel patch 0014 adds an N8 row to the E6 bridge (`secure_wdt.c`); `secure_wdt_call.S` is unchanged. On by default in `n8.dts` (`e6.swd=1`); `test/n8-noswd.dtb` turns it off. ISA data VA 0xc6800000 = phys 0x1fd50000, reserved as `isasw@1fd50000`; alloc/free/pet c6361cb3 / c6361bad / c6362b63; token 240. Unlike the E6 there is no stopped task's stack to borrow, so it uses the top of a 60 KB all-zero run of the data region (`c68e0000`), re-checked clear at init. Details in `work/swd-n8/NOTES.md` §10 |
 | RAM log after a reset | `ramcon` at `0x1f000000`, `e6logs.sis` | ✅ works | Only after a reset: when the phone powers off, the RAM is lost |
 | `reboot` back to Symbian | soc reset `0x20033114` + startup mode in `0x20040400` bits 20-23 | ✅ works | Symbian left the mode at 0, then the reset powers the N8 off. Setting it to `0xe` first (as `rebootdriver.ldd` does) brings Symbian back. Done by the restart handler (kernel patch 0006) with the 4th watchdog reg in `n8.dts`; `reboot` in the shell returns to Symbian (confirmed on the phone 24.10.2026) |
 | Internal eMMC (`E:`, 16 GB) | `mmcblk1`, Samsung MAG4EM | ✅ reads | Stuck in 1-bit mode (`switch to bus width 4 failed`). One FAT32 filesystem, no partition table. **Never write to it** |
@@ -92,7 +92,7 @@ State on 23.10.2026, Symbian Anna 024.001, `n8boot` loader, E6 kernel with the N
 
 ## Suggested order
 
-1. ~~Secure watchdog~~ **done** (patch 0014): move `e6.swd=1` into `n8.dts` once it has run for longer than a few minutes.
+1. ~~Secure watchdog~~ **done** (patch 0014, on in `n8.dts`): still worth a long soak; `test/n8-noswd.dtb` turns it off.
 2. LEDs (`leds-lp5521` at i2c-1 `0x33`) and proximity sensor (in n8.dts, to test), power key.
 3. Charging (bq2415x, as on the E6).
 4. Bluetooth (UART driver), then WLAN (SPI driver).
