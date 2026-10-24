@@ -89,7 +89,12 @@ From the karap IRQ/FIQ dispatchers (`0x800b7c88` = `Arm::SetIrqHandler` target, 
 | `+0x9c` | busy, wait while 1 |
 | `+0xa0` `+0xa4` | fifo / data |
 - irqs 99 and 101 (`Interrupt::Bind(0x63 / 0x65)`), dma via dma.dll.
-- pin mux: `0x20031868`, `0x20031870`, `0x2003187c`.
+- pin mux (corrected 24.10.2026 from `bc02_uart1` `FUN_8018c554`, which writes in this order):
+  `0x20031864 = 0x10000000`, `0x20031868 = 0x60000000`, `+0x878 = 6`, `+0x874 = 1`,
+  read `+0x870 & 0x70`, `+0x878 = 0x600`, `+0x874 = 0x100`. So the registers are
+  **864/868/874/878**, not 868/870/87c: `0x870` is read only here and `0x87c` is never
+  touched. On the N8 `0x868` reads 0 under Linux, i.e. the pads are NOT in uart mode
+  until something writes this sequence (kernel patch 0015 does it at startup).
 
 ## Linux drivers (13.10.2026)
 In the kernel fork (`linux/kernel/linux`, branch `e6`), `CONFIG_ARCH_RAPUYAMA` selects both:
