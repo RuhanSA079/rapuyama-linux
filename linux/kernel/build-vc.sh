@@ -45,7 +45,7 @@ sed -E -e "s#^(file /bin/busybox ).*( 755 0 0)#\1$(realpath "$HERE/../../work/dl
 	"$HERE/../initramfs/initramfs.list" > "$KOUT/initramfs.list"
 
 # input / sensor test tools (linux/initramfs/{keytest,touchtest}.c, sensortest.sh)
-for t in keytest touchtest physdump fbtouch; do
+for t in keytest touchtest physdump fbtouch wspitest; do
 	arm-linux-gnu-gcc -march=armv6k -marm -static -nostdlib -fno-pie -no-pie \
 		-ffreestanding -fno-builtin -fomit-frame-pointer -fno-stack-protector \
 		-Os -Wall -Wextra -Werror \
@@ -61,6 +61,7 @@ done
 	printf 'file /usr/bin/sensortest %s 755 0 0\n' "$HERE/../initramfs/sensortest.sh"
 	printf 'file /usr/bin/physdump %s 755 0 0\n' "$KOUT/rootfs-extra/physdump"
 	printf 'file /usr/bin/fbtouch %s 755 0 0\n' "$KOUT/rootfs-extra/fbtouch"
+	printf 'file /usr/bin/wspitest %s 755 0 0\n' "$KOUT/rootfs-extra/wspitest"
 	printf 'file /usr/bin/swddump %s 755 0 0\n' "$HERE/../initramfs/swddump.sh"
 	printf 'file /usr/bin/khrntest %s 755 0 0\n' "$KOUT/vc-khrn/khrntest"
 	printf 'file /usr/bin/vctri %s 755 0 0\n' "$KOUT/vc-khrn/vctri"
@@ -99,7 +100,8 @@ done
 	--enable AK8974 --enable SENSORS_TSL2563 \
 	--enable RMI4_CORE --enable RMI4_I2C --enable RMI4_2D_SENSOR --enable RMI4_F11 \
 	--enable NEW_LEDS --enable LEDS_CLASS --enable LEDS_CLASS_MULTICOLOR \
-	--enable LEDS_LP55XX_COMMON --enable LEDS_LP5521
+	--enable LEDS_LP55XX_COMMON --enable LEDS_LP5521 \
+	--enable SPI --enable SPI_RAPUYAMA --enable SPI_SPIDEV
 # DEVMEM_ALL=1: /dev/mem for all of RAM (physdump / swddump, firmware dumps)
 [ "${DEVMEM_ALL:-}" = 1 ] && "$KSRC/scripts/config" --file "$KOUT/.config" --disable STRICT_DEVMEM
 # modem experiments off (drivers/misc/rapuyama_*), they made boots die
