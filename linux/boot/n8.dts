@@ -26,6 +26,14 @@
 	model = "Nokia N8-00 (RapuYama)";
 
 	/*
+	 * e6.lowmem=1: take back the ram between 0x11600000 and the kernel,
+	 * which Linux used to drop. lowmem.c walks Symbian's page tables and
+	 * keeps every page Symbian maps, handing back the rest: 126-128 MB on
+	 * the N8, so 239 MB of ram instead of 110. The E6's daily dtb has had
+	 * this all along. n8-lowwatch.dtb (e6.lowmem=0 e6.lowwatch=1) watches
+	 * those pages for 10 min if anything ever looks like it is being
+	 * written behind Linux's back.
+	 *
 	 * e6.swd=1: Linux pets the secure watchdog itself (kernel patch 0014),
 	 * without which the firmware resets the phone 20-90 s after the jump.
 	 * The bridge checks the live ISA image and its state before it calls
@@ -33,7 +41,7 @@
 	 * reset we used to get anyway. e6.swd=0 (n8-noswd.dtb) turns it off.
 	 */
 	chosen {
-		bootargs = "earlycon=ramcon,0x1f000000 keep_bootcon console=tty0 panic=10 nohlt clk_ignore_unused pd_ignore_unused cma=0 rootfstype=ramfs e6.usbsh e6.nogui videocore.debug=1 videocore.loader_b=1 videocore.dma=1 videocore.rgb565=1 videocore.panel=n8 wlcore.irq_poll_ms=10 e6.swd=1";
+		bootargs = "earlycon=ramcon,0x1f000000 keep_bootcon console=tty0 panic=10 nohlt clk_ignore_unused pd_ignore_unused cma=0 rootfstype=ramfs e6.usbsh e6.nogui videocore.debug=1 videocore.loader_b=1 videocore.dma=1 videocore.rgb565=1 videocore.panel=n8 wlcore.irq_poll_ms=10 e6.swd=1 e6.lowmem=1";
 	};
 	/* all keys go straight to gpios and switch to gnd (schematic p4).
 	 * polled, the gpio irq polarity is not known */
