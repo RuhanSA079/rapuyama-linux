@@ -1062,6 +1062,68 @@ TInt DRunBlobChan::Request(TInt aFunction, TAny* a1, TAny* a2){
 		return r!=KErrNone ? r : bad;
 	}
 
+	// EControlWlanClock (N8 RM-596 Anna 024.001 only): what wlanhpa.dll's
+	// power on (0x80389d4c) does, so the WL1271 has power and its 19.2 MHz
+	// reference clock when linux takes over (symbian switches WLAN off before
+	// the jump, the modem gates that clock). PowerResourceManager.dll exports
+	// (wlanhpa's import stubs at 0x803899b4 / 0x803899bc point at them):
+	//   0x800c1c3c RegisterClient(TUint& aClientId, const TDesC8& aName)
+	//   0x800c1d48 ChangeResourceState(aClientId, aResourceId, aState, aCb, a5)
+	//              wlanhpa passes aCb=0, a5=0 -> synchronous
+	// resource 0x25 = EHwClkExtSysClk19M2 (gate 0x1a, the modem through
+	// sisa_wrapper), level 1 = on. the client stays registered: deregistering
+	// would drop the request. then genio100 = WLANENABLE high (output level
+	// first, then direction, as gpio-rapuyama does: bank 3 bit 4, out set
+	// 0x200319c4, dir out 0x20031a28, through the c6 window) and 20 ms
+	// (wlanhpa sleeps 12).
+	// a1 = 5 word result: register result, client id, change result, out
+	// register, dir register. nothing else is touched
+	if(aFunction==RRunBlob::EControlWlanClock){
+		typedef TInt (*TPrmRegister)(TUint& aClientId, const TDesC8& aName);
+		typedef TInt (*TPrmChange)(TUint aClientId, TUint aResourceId, TInt aState, TAny* aCb, TAny* a5);
+		const TUint32 KPrmRegister=0x800c1c3cu, KPrmChange=0x800c1d48u;
+		const TUint KRes19M2=0x25;
+		TUint32 out[5]={0, 0, 0, 0, 0};
+		TInt r=KErrNone;
+		// this firmware only: the two exports' first instructions, wlanhpa's
+		// stubs pointing at them and its client name
+#define RB_ROM(a) (*(const volatile TUint32*)(a))
+		if(RB_ROM(KPrmRegister)!=0xe1a03000u || RB_ROM(KPrmChange)!=0xe1a0c000u
+			|| RB_ROM(0x803899b8u)!=KPrmRegister || RB_ROM(0x803899c0u)!=KPrmChange
+			|| RB_ROM(0x8038a0b0u)!=10 || RB_ROM(0x8038a0b4u)!=0x4e414c57u){ // "WLAN"
+			r=KErrNotSupported;
+		}
+		if(r==KErrNone){
+			_LIT8(KClient, "RunBlobWlanClk");
+			TUint client=0;
+			NKern::ThreadEnterCS();
+			TInt rr=((TPrmRegister)KPrmRegister)(client, KClient);
+			out[0]=(TUint32)rr;
+			out[1]=client;
+			if(rr==KErrNone){
+				TInt rc=((TPrmChange)KPrmChange)(client, KRes19M2, 1, NULL, NULL);
+				out[2]=(TUint32)rc;
+				if(rc!=KErrNone){r=rc;}
+			}else{
+				r=rr;
+			}
+			NKern::ThreadLeaveCS();
+			// genio100 high even if the clock request failed: the chip
+			// powered is still the better state for linux
+			// the c6 peripheral window, phys 0x20031900
+			volatile TUint32* b=(volatile TUint32*)0xc6031900u;
+			b[0xc4/4]=1u<<4; // RY_OUT(3) + SET
+			b[0x128/4]=1u<<4; // RY_IN(3) + DIR_OUT
+			out[3]=b[0xc0/4];
+			out[4]=b[0x120/4];
+			NKern::Sleep(NKern::TimerTicks(20));
+		}
+#undef RB_ROM
+		TPtrC8 src((const TUint8*)out, sizeof(out));
+		TInt rw=Kern::ThreadDesWrite(&Kern::CurrentThread(), a1, src, 0);
+		return r!=KErrNone ? r : rw;
+	}
+
 	if(aFunction!=RRunBlob::EControlRunBlob){return KErrNotSupported;}
 
 	const TInt KPageSz=0x1000;

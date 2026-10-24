@@ -64,7 +64,7 @@ class RRunBlob : public RBusLogicalChannel{
 			EControlHookCbus, EControlHookCbusRead, EControlHookCbusRemove,
 			EControlModemReset, EControlPeek,
 			EControlHookBeac8, EControlHookBeac8Read, EControlHookBeac8Remove,
-			EControlWatchService};
+			EControlWatchService, EControlWlanClock};
 	#ifndef __KERNEL_MODE__
 		TInt Open(){return DoCreate(KRunBlobName, TVersion(1,0,0), KNullUnit, NULL, NULL);}
 		TInt Run(TDes8& aBuf){return DoControl(EControlRunBlob, (TAny*)&aBuf);}
@@ -147,6 +147,10 @@ class RRunBlob : public RBusLogicalChannel{
 		// sleep until just before symbian's next ~210 s reset service (tick
 		// 210000*k - 900 ms), record every thread's cpu time each 200 ms
 		TInt WatchService(TDes8& aBuf){return DoControl(EControlWatchService, (TAny*)&aBuf);}
+		// N8 only: PRM resource 0x25 (WL1271 19.2 MHz clock) on + genio100
+		// high, like wlanhpa's power on. aBuf gets 5 words: register result,
+		// client id, change result, gpio out register, gpio dir register
+		TInt WlanClock(TDes8& aBuf){return DoControl(EControlWlanClock, (TAny*)&aBuf);}
 
 		// patch karap's cbus-write fn 0x800b8494 to log every PMIC/CBUS write
 		// {dev,reg,val} into a ram ring (ring[0]=count, 16-byte slots at +4).

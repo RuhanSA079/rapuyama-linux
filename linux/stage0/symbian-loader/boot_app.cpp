@@ -356,6 +356,17 @@ GLDEF_C TInt E32Main(){
 #endif
 	}
 #endif
+#ifdef RB_WLAN_CLOCK
+	// n8: WL1271 reference clock (PRM 0x25) on + WLANENABLE high, so linux
+	// finds the chip powered and clocked. only logged, the boot goes on
+	{
+		TUint32 w[5]={0, 0, 0, 0, 0};
+		TPtr8 p((TUint8*)w, 0, sizeof(w));
+		TInt rw=dev.WlanClock(p);
+		Lf(_L8("wlan clock=%d register=%d client=%x change=%d gpio out=%08x dir=%08x\n"),
+			rw, (TInt)w[0], w[1], (TInt)w[2], w[3], w[4]);
+	}
+#endif
 	Blank();
 	L(_L8("about-to-Boot (one-way)\n"));
 	gLog.Close(); gFs.Close();

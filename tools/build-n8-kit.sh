@@ -111,7 +111,8 @@ DTS="$PHONE-usb"
 echo ">> loader"
 (cd "$ROOT/linux/stage0/symbian-loader" &&
 	# e6bfix with its own name, uid and dtb: <phone>boot reads E:\<phone>.dtb
-	RB_DEFS="-DRB_IMAGE_BOOT -DRB_DTB=\"$PHONE\"" \
+	# n8: also switches the WL1271's 19.2 MHz clock on before the jump
+	RB_DEFS="-DRB_IMAGE_BOOT -DRB_DTB=\"$PHONE\"$([ "$PHONE" = n8 ] && echo ' -DRB_WLAN_CLOCK')" \
 		./build_app.sh "${PHONE}boot" boot_app.cpp "$BOOT_UID" &&
 	./build_app.sh e6logs ramread_app.cpp 0xe1000022)
 
