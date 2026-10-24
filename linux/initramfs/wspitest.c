@@ -168,6 +168,55 @@ static void write32(u32 addr, u32 val)
 	xfer("  write", 8, 0);
 }
 
+/*
+ * one 32 bit read: command, then up to 7 busy / data words. returns the
+ * offset of the ready busy word in rxb or -1, the word in *val
+ */
+static int read32(const char *what, u32 addr, u32 *val)
+{
+	u32 i;
+
+	memset(txb, 0, sizeof(txb));
+	put_be32(txb, WSPI_READ | WSPI_LEN(4) | WSPI_ADDR(addr));
+	xfer(what, 4, 28);
+	for (i = 0; i + 8 <= 28; i += 4) {
+		if (rxb[i + 3] & 1) {	/* busy word bit 0 = ready */
+			*val = get_be32(rxb + i + 4);
+			return (int)i;
+		}
+	}
+	return -1;
+}
+
+/*
+ * wl12xx_top_reg_read: the "top" registers (fuses, clocks) sit behind the
+ * chip's OCP bridge: address >> 1 + 0x30000 to OCP_POR_CTR, 2 (read) to
+ * OCP_CMD, poll OCP_DATA_READ for bit 18 (ready), bits 17:16 = status
+ * (1 = ok). In the boot partition register 0x300000 + x is at 0x14fc0 + x.
+ * wlcore fails here on the N8 ("Top register access timed out")
+ */
+static void top_read(u32 reg)
+{
+	u32 i, v = 0;
+
+	write32(0x14fc0 + 0x9b4, (reg >> 1) + 0x30000);
+	write32(0x14fc0 + 0x9b8, 2);
+	for (i = 0; i < 32; i++) {
+		if (read32("ocp data", 0x14fc0 + 0x9bc, &v) < 0) {
+			puts_("  ocp data read: no ready busy word\n");
+			continue;
+		}
+		if (v & (1u << 18))
+			break;
+	}
+	puts_("top reg ");
+	puthex(reg, 4);
+	puts_(": ocp data ");
+	puthex(v, 8);
+	puts_(i < 32 ? ((v >> 16 & 3) == 1 ? " ready, ok\n" : " ready, error status\n") :
+	       " never ready (wlcore's timeout)\n");
+}
+
 void __attribute__((naked)) _start(void)
 {
 	__asm__ volatile("mov r0, sp\n\tb main_args");
@@ -227,16 +276,7 @@ void main_args(u32 *sp)
 	msleep(10);
 
 	/* 5. command, then up to 7 busy / data words */
-	memset(txb, 0, sizeof(txb));
-	put_be32(txb, WSPI_READ | WSPI_LEN(4) | WSPI_ADDR(CHIP_ID_ADDR));
-	xfer("read chip id", 4, 28);
-	for (i = 0; i + 8 <= 28; i += 4) {
-		if (rxb[i + 3] & 1) {	/* busy word bit 0 = ready */
-			found = (int)i;
-			id = get_be32(rxb + i + 4);
-			break;
-		}
-	}
+	found = read32("read chip id", CHIP_ID_ADDR, &id);
 	if (found < 0) {
 		puts_("no ready busy word: chip not answering (clock, enable, cs?)\n");
 		exit_with_status(2);
@@ -249,5 +289,8 @@ void main_args(u32 *sp)
 		puts_(" = wl1271 PG10\n");
 	else
 		puts_(" (expected 04030111)\n");
+	/* 6. what wlcore reads next: the PG version fuse, then the spare reg */
+	top_read(0x050a);	/* WL127X_REG_FUSE_DATA_2_1 */
+	top_read(0x2320);	/* WL_SPARE_REG */
 	exit_with_status(id == 0x04030111 || id == 0x04030101 ? 0 : 3);
 }
