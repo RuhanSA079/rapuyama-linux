@@ -336,6 +336,39 @@ GLDEF_C TInt E32Main(){
 	TInt r=dev.Open();
 	if(r!=KErrNone){L(_L8("open failed\n")); Fail(_L("can't open the ldd"), r); gLog.Close(); gFs.Close(); return r;}
 
+#ifdef RB_WLAN_CLOCK
+	// n8: the bluetooth uart as SYMBIAN has it right now. We run as a normal
+	// symbian app, so with a bluetooth link up this catches the live state of
+	// the block; by the time linux sees it the handoff has always left
+	// +0x84 = 0 and its transmitter never shifts a bit. Peek() maps uncached,
+	// unlike ReadPhys. Read only, a few lines in the log
+	{
+		static const TUint32 KBtRegs[]={
+			0x20025a04, 0x20025a08, 0x20025a0c, 0x20025a10, 0x20025a14,
+			0x20025a18, 0x20025a1c, 0x20025a20, 0x20025a28, 0x20025a2c,
+			0x20025a30, 0x20025a34, 0x20025a38, 0x20025a3c, 0x20025a48,
+			0x20025a5c, 0x20025a60, 0x20025a84, 0x20025a88, 0x20025a8c,
+			0x20025a9c, 0x20025aa0, 0x20025ab4, 0x20025ab8,
+			0x20031864, 0x20031868, 0x2003186c, 0x20031870, 0x20031874,
+			0x20031878, 0x2003187c,
+			0x20020208, 0x20020308, 0x20020804, 0x200330d0};
+		L(_L8("bt regs (symbian live):\n"));
+		for(TUint i=0; i<sizeof(KBtRegs)/sizeof(KBtRegs[0]); i+=4){
+			TBuf8<96> line;
+			for(TUint j=i; j<i+4 && j<sizeof(KBtRegs)/sizeof(KBtRegs[0]); ++j){
+				TUint32 v=0;
+				TInt pr=dev.Peek(KBtRegs[j], &v);
+				TBuf8<24> one;
+				if(pr==KErrNone){one.Format(_L8(" %08x=%08x"), KBtRegs[j], v);}
+				else{one.Format(_L8(" %08x=err%d"), KBtRegs[j], pr);}
+				line.Append(one);
+			}
+			line.Append(_L8("\n"));
+			L(line);
+		}
+	}
+#endif
+
 	TUint8* buf=(TUint8*)User::Alloc(KBuf);
 	if(!buf){L(_L8("no mem\n")); Fail(_L("no heap"), KErrNoMemory); dev.Close(); gLog.Close(); gFs.Close(); return KErrNoMemory;}
 
