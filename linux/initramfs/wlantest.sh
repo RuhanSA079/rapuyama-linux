@@ -20,7 +20,19 @@ echo "== kernel log so far"
 kmsg
 echo "== interface"
 ls /sys/class/net/
-[ -d /sys/class/net/wlan0 ] || { echo "no wlan0: wlcore didn't probe (log above)"; exit 1; }
+if [ ! -d /sys/class/net/wlan0 ]; then
+	echo "no wlan0: wlcore didn't probe (log above)"
+	echo "== wlan platform devices"
+	ls -l /sys/bus/platform/devices/ | grep -iE "wl1|wl12" 
+	for d in /sys/bus/platform/devices/wl1*; do
+		[ -e "$d" ] && echo "$d driver: $(readlink $d/driver)"
+	done
+	echo "== blocked tasks (sysrq w)"
+	echo w > /proc/sysrq-trigger
+	sleep 1
+	dmesg | sed -n '/Show Blocked State/,$p' | grep -v videocore
+	exit 1
+fi
 echo "== firmware files"
 ls -la /lib/firmware/ti-connectivity/
 

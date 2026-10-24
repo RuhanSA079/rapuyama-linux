@@ -19,6 +19,8 @@ PATCHES="$HERE/patches"
 
 if [ "${1:-}" = reset ]; then
 	git -C "$KSRC" checkout -- .
+	# files the patches add (the build is out of tree, nothing else is new)
+	git -C "$KSRC" clean -fdq
 	rm -f "$(git -C "$KSRC" rev-parse --absolute-git-dir)/n8-patches.stamp"
 	echo "kernel tree reset to $(git -C "$KSRC" rev-parse --short HEAD)"
 	exit 0
@@ -41,6 +43,7 @@ fi
 if [ -f "$STAMP" ] && [ "$(cut -d' ' -f2 "$STAMP")" = "$(tree)" ]; then
 	echo "kernel patches changed, re-applying"
 	git -C "$KSRC" checkout -- .
+	git -C "$KSRC" clean -fdq
 fi
 if ! git -C "$KSRC" diff --quiet; then
 	echo "kernel tree has changes that aren't this patch set (edited by hand,"
