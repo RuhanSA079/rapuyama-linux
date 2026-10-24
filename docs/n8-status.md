@@ -15,7 +15,7 @@ State on 23.10.2026, Symbian Anna 024.001, `n8boot` loader, E6 kernel with the N
 | --- | --- | --- | --- |
 | Boot from Symbian | `n8boot.sis` (e6bfix built for `E:\n8.dtb`) | ✅ works | Needs a 32 MB+ RAM block starting below `0x1a000000`; the N8 hands out 96 MB at `0x19a00000`, the end check at `0x1f000000` had to go. Reads `Image` + `n8.dtb` from E: or the memory card (asks when both have them), blanks the Symbian display at the handoff (`E:\keepscreen.txt` skips that) |
 | CPU | ARM1176JZF-S r0p4, 677 BogoMIPS | ✅ works | |
-| RAM | 93 MB for Linux | ✅ works | `e6.lowmem` (the RAM below the kernel) not tried on the N8 |
+| RAM | 256 MB, 239 MB of it for Linux | ✅ works | 24.10.2026: `e6.lowmem=1` is in `n8.dts` now. Linux used to start at its boot chunk and drop everything below it; `lowmem.c` walks Symbian's page tables and hands back every page Symbian does not map. **126-128 MB back: 239 MB total / 161 MB available, up from 110 / 74** (`free` 173 MB, was ~73 MB). The E6's daily dtb always had this, the N8 never did. 11 min clean on the phone, secure watchdog petting throughout. `test/n8-lowwatch.dtb` (`e6.lowmem=0 e6.lowwatch=1`) checksums the reclaimed pages every 30 s for 10 min if anything ever looks written behind Linux's back |
 | Timers, interrupts | RapuYama intc + timers | ✅ works | |
 | USB device: serial shell | MUSB + g_serial, `/dev/ttyACM*` on the PC | ✅ works | |
 | SoC + PMIC watchdog | `rapuyama-wdt` | ✅ works | |
