@@ -1,8 +1,8 @@
 ---
  drivers/tty/serial/Kconfig         |  10 +
  drivers/tty/serial/Makefile        |   1 +
- drivers/tty/serial/rapuyama_uart.c | 453 ++++++++++
- 3 files changed, 464 insertions(+)
+ drivers/tty/serial/rapuyama_uart.c | 475 ++++++++++
+ 3 files changed, 486 insertions(+)
  create mode 100644 drivers/tty/serial/rapuyama_uart.c
 
 diff --git a/drivers/tty/serial/Kconfig b/drivers/tty/serial/Kconfig
@@ -40,10 +40,10 @@ index 6954aa468..766288a3a 100644
  # These Sparc drivers have to appear before others such as 8250
 diff --git a/drivers/tty/serial/rapuyama_uart.c b/drivers/tty/serial/rapuyama_uart.c
 new file mode 100644
-index 000000000..16567556a
+index 000000000..91be529ba
 --- /dev/null
 +++ b/drivers/tty/serial/rapuyama_uart.c
-@@ -0,0 +1,516 @@
+@@ -0,0 +1,540 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Nokia RapuYama UART (N8/E6/E7/C7), the port the bluetooth chip hangs off
@@ -116,6 +116,10 @@ index 000000000..16567556a
 +module_param(poll_us, uint, 0444);
 +MODULE_PARM_DESC(poll_us, "service the port from a timer every N us instead of on the irq (0 = irq)");
 +
++static bool enable_block;
++module_param(enable_block, bool, 0644);
++MODULE_PARM_DESC(enable_block, "write tx+rx enable at startup when the firmware left the block off");
++
 +static bool reconfigure;
 +module_param(reconfigure, bool, 0644);
 +MODULE_PARM_DESC(reconfigure, "let set_termios write the baud registers (the firmware notes say reconfiguring can fault)");
@@ -129,6 +133,7 @@ index 000000000..16567556a
 +	bool tx_stopped;
 +	int irq[RY_UART_MAX_IRQ];
 +	int nirq;
++	u32 fixed_baud;		/* what the firmware left the line at */
 +};
 +
 +static inline struct ry_uart *to_ry(struct uart_port *port)
@@ -319,10 +324,28 @@ index 000000000..16567556a
 +	int i, ret;
 +
 +	ry->tx_stopped = false;
-+	/* Symbian left the block enabled; say so rather than reconfigure it */
-+	if (!(ry_rd(port, RY_UART_ENABLE) & RY_UART_TX_RX_ON))
-+		dev_warn(port->dev, "tx/rx not enabled (%08x), bluetooth off in symbian?\n",
-+			 ry_rd(port, RY_UART_ENABLE));
++	/*
++	 * Symbian hands the block over switched off when bluetooth is not in
++	 * use (seen on the N8: ENABLE reads 0 and every byte written is lost).
++	 * Switching it on is two registers and does not touch the baud
++	 * divider, which is the part the firmware notes say can fault.
++	 */
++	if (!(ry_rd(port, RY_UART_ENABLE) & RY_UART_TX_RX_ON)) {
++		dev_warn(port->dev, "tx/rx not enabled (%08x), bluetooth off in symbian?%s\n",
++			 ry_rd(port, RY_UART_ENABLE),
++			 enable_block ? " switching it on" : "");
++		if (enable_block) {
++			unsigned int spin = 100000;
++
++			while (ry_rd(port, RY_UART_BUSY) && --spin)
++				cpu_relax();
++			ry_wr(port, RY_UART_LOCK, 1);
++			ry_wr(port, RY_UART_ENABLE, RY_UART_TX_RX_ON);
++			ry_wr(port, RY_UART_LOCK, 0);
++			dev_info(port->dev, "enable now %08x\n",
++				 ry_rd(port, RY_UART_ENABLE));
++		}
++	}
 +	/* masked since probe; drop anything latched before we listen */
 +	ry_wr(port, RY_UART_IRQ_MASK, 0);
 +	ry_wr(port, RY_UART_IRQ_CLEAR, ~0U);
@@ -367,7 +390,7 @@ index 000000000..16567556a
 +
 +	baud = uart_get_baud_rate(port, new, old, 1200, RY_UART_REF / 16);
 +	if (!baud)
-+		baud = port->uartclk ? port->uartclk : 115200;
++		baud = to_ry(port)->fixed_baud;
 +
 +	uart_port_lock_irqsave(port, &flags);
 +	if (reconfigure) {
@@ -383,7 +406,7 @@ index 000000000..16567556a
 +		ry_wr(port, RY_UART_LOCK, 0);
 +	} else {
 +		/* the line stays as the firmware set it up */
-+		baud = port->uartclk ? port->uartclk : baud;
++		baud = to_ry(port)->fixed_baud;
 +	}
 +	uart_update_timeout(port, new->c_cflag, baud);
 +	uart_port_unlock_irqrestore(port, flags);
@@ -472,7 +495,8 @@ index 000000000..16567556a
 +	ry->port.flags = UPF_BOOT_AUTOCONF;
 +	ry->port.line = 0;
 +	of_property_read_u32(dev->of_node, "current-speed", &speed);
-+	ry->port.uartclk = speed;
++	ry->fixed_baud = speed;
++	ry->port.uartclk = RY_UART_REF;
 +
 +	/* Symbian has it on already; take a reference so nothing turns it off */
 +	ry->clk = devm_clk_get_optional_enabled(dev, NULL);

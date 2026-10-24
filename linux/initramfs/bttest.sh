@@ -6,6 +6,9 @@
 #   bttest h4         attach with h4 instead (bcsp is what BC02 normally uses)
 #   bttest none       set the port up but don't attach, for poking at it by hand
 #
+# NOENABLE=1 leaves the uart block alone if Symbian left it off,
+# NOGPIO=1 leaves the bt reset/wake lines alone.
+#
 # needs bluetooth switched on in Symbian before the jump (the uart's power,
 # clock and pin mux come from there), and n8boot's wlan step on, which also
 # turns on the clock BT shares with the WL1271 reference (PRM 0x25 / gate 0x1a).
@@ -22,16 +25,41 @@ dmesg | grep -iE "rapuyama_uart|ttyRY" || echo "  (nothing: SERIAL_RAPUYAMA not 
 [ -e "$DEV" ] || { echo "no $DEV, the uart did not probe"; exit 1; }
 ls -l "$DEV"
 
-say "uart registers (0x20025a00: 04 lock, 34 irq status, 38 irq mask, 84 enable)"
-for off in 04 34 38 84 9c a0 2c; do
-	printf '  +0x%s = %s\n' "$off" "$(physdump $((0x20025a00 + 0x$off)) 4 2>/dev/null | od -An -tx4 | tr -d ' ')"
+# devmem, not physdump: physdump wants a 4 KB aligned address and these are not
+say "uart registers (04 lock, 34 irq status, 38 irq mask, 84 enable, 9c busy, a0 tx room, 2c rx level)"
+for off in 04 2c 34 38 84 9c a0; do
+	printf '  +0x%s = %s\n' "$off" "$(devmem $((0x20025a00 + 0x$off)) 32 2>/dev/null)"
 done
+
+EN=$(devmem 0x20025a84 32 2>/dev/null)
+if [ "$EN" = 0x00000000 ]; then
+	say "the block is OFF (enable 0x84 = $EN)"
+	echo "  Symbian hands the uart over disabled when bluetooth is not in use."
+	echo "  Every byte written goes nowhere, which is what the last run did."
+	if [ "$NOENABLE" = 1 ]; then
+		echo "  NOENABLE=1, leaving it off"
+	else
+		echo "  switching tx+rx on (0x84 = 3); NOENABLE=1 bttest skips this"
+		devmem 0x20025a04 32 1
+		devmem 0x20025a84 32 3
+		devmem 0x20025a04 32 0
+		echo "  enable now $(devmem 0x20025a84 32)"
+	fi
+fi
 
 say "bt chip gpios (reset $RST, wake $WAKE)"
 for g in $RST $WAKE; do
 	[ -d /sys/class/gpio/gpio$g ] || echo $g > /sys/class/gpio/export 2>/dev/null
-	[ -d /sys/class/gpio/gpio$g ] && echo "  gpio$g = $(cat /sys/class/gpio/gpio$g/value 2>/dev/null)"
+	[ -d /sys/class/gpio/gpio$g ] || { echo "  gpio$g: cannot export"; continue; }
+	echo "  gpio$g before: $(cat /sys/class/gpio/gpio$g/value 2>/dev/null)"
+	if [ "$NOGPIO" != 1 ]; then
+		# "out" alone drives low, so set the value after the direction
+		echo out > /sys/class/gpio/gpio$g/direction 2>/dev/null
+		echo 1 > /sys/class/gpio/gpio$g/value 2>/dev/null
+		echo "  gpio$g after:  $(cat /sys/class/gpio/gpio$g/value 2>/dev/null)"
+	fi
 done
+[ "$NOGPIO" != 1 ] && sleep 1
 
 say "interrupt counts before"
 grep -E "rapuyama_uart|ttyRY" /proc/interrupts || echo "  (no uart irq line; polled build?)"
