@@ -36,7 +36,7 @@ State on 23.10.2026, Symbian Anna 024.001, `n8boot` loader, E6 kernel with the N
 | Accelerometer | ST LIS302DL, i2c-0 `0x1d` | ✅ works | `st_accel`, ~9.7 m/s2 lying flat |
 | Magnetometer | AK8974, i2c-0 `0x0f` | ✅ works | Reads ~1 G total: needs calibration for a compass |
 | Ambient light | TSL2563, i2c-1 `0x29` | ✅ works | |
-| Proximity | N1104, output on gpio 3 | 🔧 todo | One more `gpio-keys` entry (as a switch), level read like the keys |
+| Proximity | N1104, output on gpio 3 (VCC = VAUX1) | 🧪 test | `gpio-keys-polled` switch `SW_FRONT_PROXIMITY`; gpio 3 confirmed by `proximity.pdd`, near = high is inferred (check with `keytest`). See `work/leds-n8/NOTES.md` |
 
 ## Power
 
@@ -50,7 +50,8 @@ State on 23.10.2026, Symbian Anna 024.001, `n8boot` loader, E6 kernel with the N
 
 | Part | Hardware | Status | Notes |
 | --- | --- | --- | --- |
-| Menu key light, notification / white indicator LEDs | LED driver N2402 on i2c-1 `0x33` (LEDs V2420, V2422, V2411) | 🔧 todo | Answers at `0x33`, LP5523 address range: try mainline `leds-lp5523`. Which channel is which LED has to be found by trying. The white LED at the USB port may also be the charger's status LED |
+| Menu key light, indicator LED | LED driver N2402 = **TI LP5521** on i2c-1 `0x33`: R output -> V2420 + V2422, B output -> V2411, G unused | 🧪 test | Mainline `leds-lp5521` (ISA software has `hal_light_phy_lp5521.c`, the pinout matches). Currents capped at 5 mA until Symbian's value is read on the phone. See `work/leds-n8/NOTES.md` |
+| Charging LED | V2410 on the GAZOO `Chind` pin (schematic p5) | 🔬 research | Not on the LP5521: driven by the PMIC's charger indicator, probably the LED at the USB port |
 | Camera flash | Xenon flash + a separate LED (`ILED`), camera page of the schematic | 🔬 research | Probably switched together with the camera, through the VideoCore side |
 
 ## Display and graphics
@@ -92,7 +93,7 @@ State on 23.10.2026, Symbian Anna 024.001, `n8boot` loader, E6 kernel with the N
 ## Suggested order
 
 1. Secure watchdog for the N8 firmware (`swddump`), so Linux stays up longer than ~4 minutes and a watchdog reset returns to Symbian.
-2. LEDs (`leds-lp5523` at i2c-1 `0x33`), proximity sensor, power key.
+2. LEDs (`leds-lp5521` at i2c-1 `0x33`) and proximity sensor (in n8.dts, to test), power key.
 3. Charging (bq2415x, as on the E6).
 4. Bluetooth (UART driver), then WLAN (SPI driver).
 5. Camera, audio, GPS.

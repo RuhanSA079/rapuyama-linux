@@ -97,7 +97,9 @@ done
 	--enable IIO --enable IIO_BUFFER --enable IIO_TRIGGERED_BUFFER \
 	--enable IIO_ST_ACCEL_3AXIS --enable IIO_ST_ACCEL_I2C_3AXIS \
 	--enable AK8974 --enable SENSORS_TSL2563 \
-	--enable RMI4_CORE --enable RMI4_I2C --enable RMI4_2D_SENSOR --enable RMI4_F11
+	--enable RMI4_CORE --enable RMI4_I2C --enable RMI4_2D_SENSOR --enable RMI4_F11 \
+	--enable NEW_LEDS --enable LEDS_CLASS --enable LEDS_CLASS_MULTICOLOR \
+	--enable LEDS_LP55XX_COMMON --enable LEDS_LP5521
 # DEVMEM_ALL=1: /dev/mem for all of RAM (physdump / swddump, firmware dumps)
 [ "${DEVMEM_ALL:-}" = 1 ] && "$KSRC/scripts/config" --file "$KOUT/.config" --disable STRICT_DEVMEM
 # modem experiments off (drivers/misc/rapuyama_*), they made boots die

@@ -31,8 +31,8 @@ Likely parts/addresses for those devices (all **[G]**, from the pinout shapes):
 | N1103 | 3D accelerometer | INT1/INT2, SDA/SDI/SDO, SCL/SPC, SDO, CS, Vdd_IO, Res | ST LIS302DL/LIS3xx. CS tied high (I2C mode), SDO tied to Vdd_IO -> SA0=1 -> **0x1d** (LIS302DL) or 0x19 (LIS3DH) |
 | N1105 | 3D magnetometer | INT, DRDY, DVDD, AVDD | AKM AK8974 / Aichi AMI30x family (0x0e / 0x0f) |
 | V1100 | ambient light sensor | SDA, SCL, VCC (VAUX2), GND | address unknown |
-| N1104 | proximity sensor | OUT -> ProxInt, **not on I2C** | GPIO only |
-| N2402 | LED driver (key/indicator LEDs V2420, V2422, V2411) | CLK_32K, EN, ADDR_SEL0 tied to VDD, CFLY charge pump | e.g. LP5521/LP5523-like (0x32..0x35), unknown |
+| N1104 | proximity sensor | OUT -> ProxInt (genio3), VCC = VAUX1 2.78 V, PROG = R1103 150R to GND, **not on I2C** | GPIO only, `proximity.pdd` uses gpio 3, edge irq, 500 ms debounce |
+| N2402 | LED driver **TI LP5521** (ISA `hal_light_phy_lp5521.c`; DSBGA pinout matches) | EN = VIO 1.8 V (no gpio), CLK_32K = SleepClkBuf, ADDR_SEL0 = VDD = VBAT, R -> V2420 + V2422 (parallel), B -> V2411, G unused | `0x33` on i2c-1 |
 | N2000 | headphone amp | SCLK/SDA, INL/INR, CPP/CPN, HPVDD/HPVSS | TI TPA6130A2-like, 0x60 |
 | N3350 | battery charger | SCL, SDA, STAT, BOOT, SW, VBUS, PMID, CSIN/CSOUT, SLRST | TI bq2415x, same family as the E6's `ti,bq24153` @0x6b |
 | N3301 | USB charger | same pinout + OTG, CD | second bq2415x |
@@ -167,7 +167,7 @@ is a FAT32 boot sector with no partition table, i.e. the whole device is `E:`.
 | | | | `0x1d` | accelerometer N1103, LIS302DL (as predicted) |
 | | | | `0x4b` | touch controller, **maXTouch address range** (the E6 one is at 0x4a), so likely not Synaptics |
 | `i2c-1` | `i2c@20032500` (hs i2c port 3) | I2C2 | `0x29` | light sensor V1100 (TSL2563 address) |
-| | | | `0x33` | LED driver N2402 (LP5523 range) |
+| | | | `0x33` | LED driver N2402 = LP5521 |
 | | | | `0x60` | headphone amp N2000 (TPA6130A2) |
 | | | | `0x6a`, `0x6b` | the two bq2415x chargers N3301 / N3350 |
 
