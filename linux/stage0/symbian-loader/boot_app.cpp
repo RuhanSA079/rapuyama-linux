@@ -390,6 +390,12 @@ GLDEF_C TInt E32Main(){
 				names[i], rw, w[1], w[3], w[4]);
 			if(rw!=KErrNone){break;}
 		}
+		// the clock request goes to the modem as a message: give it time to
+		// act before symbian is gone
+		if(n>=2){
+			User::After(500000);
+			L(_L8("wlan clock: waited 500 ms\n"));
+		}
 	}
 #endif
 	Blank();
