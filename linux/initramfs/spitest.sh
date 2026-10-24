@@ -9,8 +9,9 @@
 #   spitest 100000   the same at another speed
 #   spitest all [hz] every io32 / rxen combination with register dumps
 #
-# needs n8-spi.dtb as E:\n8.dtb. the WL1271 19.2 MHz reference clock comes from
-# the modem: n8boot requests it before the jump (E:\wlansteps.txt). capture the
+# works with n8.dtb (spi2 + the WL1271 are in it): takes the chip away from
+# wlcore (unbind) for spidev, so WLAN is gone until a reboot. the WL1271 reference clock comes from
+# the modem: n8boot requests it before the jump (off: E:\nowlan.txt). capture the
 # whole output (serial terminal log)
 ALL=
 [ "$1" = all ] && { ALL=1; shift; }
@@ -24,17 +25,28 @@ echo "== spi driver at boot"
 dmesg | grep -i rapuyama-spi
 
 echo "== WLAN enable (gpio $EN)"
-[ -d /sys/class/gpio/gpio$EN ] || echo $EN > /sys/class/gpio/export
-echo "before: $(cat /sys/class/gpio/gpio$EN/value)"
-# "out" alone drives it low (chip off), so set the value after it
-echo out > /sys/class/gpio/gpio$EN/direction
-echo 1 > /sys/class/gpio/gpio$EN/value
-sleep 1
-echo "after: $(cat /sys/class/gpio/gpio$EN/value)"
+# n8.dts keeps it high with an always-on regulator, which owns the pin
+if grep -qs wlan-en /sys/class/regulator/*/name; then
+	echo "held high by the wlan-en regulator"
+else
+	[ -d /sys/class/gpio/gpio$EN ] || echo $EN > /sys/class/gpio/export
+	echo "before: $(cat /sys/class/gpio/gpio$EN/value)"
+	# "out" alone drives it low (chip off), so set the value after it
+	echo out > /sys/class/gpio/gpio$EN/direction
+	echo 1 > /sys/class/gpio/gpio$EN/value
+	sleep 1
+	echo "after: $(cat /sys/class/gpio/gpio$EN/value)"
+fi
 
 echo "== spidev"
 D=$(ls /sys/bus/spi/devices/ | head -1)
-[ -n "$D" ] || { echo "no spi device: n8-spi.dtb not loaded?"; exit 1; }
+[ -n "$D" ] || { echo "no spi device: dtb without spi2 / the WL1271?"; exit 1; }
+# wlcore has the chip with n8.dtb: hand it to spidev
+if [ -e /sys/bus/spi/devices/$D/driver ] &&
+   [ "$(basename "$(readlink /sys/bus/spi/devices/$D/driver)")" != spidev ]; then
+	echo "unbinding $D from $(basename "$(readlink /sys/bus/spi/devices/$D/driver)")"
+	echo $D > /sys/bus/spi/devices/$D/driver/unbind
+fi
 if [ ! -e /sys/bus/spi/devices/$D/driver ]; then
 	echo spidev > /sys/bus/spi/devices/$D/driver_override
 	echo $D > /sys/bus/spi/drivers/spidev/bind

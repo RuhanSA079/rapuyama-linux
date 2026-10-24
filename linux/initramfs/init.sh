@@ -76,6 +76,13 @@ fi
 [ -f /swapfile ] && swapon -p 10 /swapfile 2>/dev/kmsg
 log "swap: $(grep -v ^Filename /proc/swaps | awk '{printf "%s %s kB, ", $1, $3}')"
 
+# n8 WLAN (TI WL1271, wlcore): keep the chip out of ELP sleep, waking it
+# times out on the N8. wlcore enters ELP through runtime PM
+for d in /sys/bus/platform/devices/wl1*; do
+	[ -e "$d/power/control" ] && echo on > "$d/power/control" &&
+		log "wlan: runtime pm off for ${d##*/}"
+done
+
 # reboot / poweroff / halt typed in the shell: busybox signals pid 1 (TERM =
 # reboot, USR2 = poweroff, USR1 = halt), and pid 1 is this script. stop
 # everything, sync, then do it for real. reboot = warm reset back to symbian

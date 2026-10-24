@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # kernel + dtb with the VideoCore display driver (CONFIG_SOC_RAPUYAMA_VIDEOCORE)
-# usage: KERN_BIN=/path/to/kern.bin [WLAN=1] [DEVMEM_ALL=1] ./build-vc.sh
+# usage: KERN_BIN=/path/to/kern.bin [WLAN=0|1] [DEVMEM_ALL=1] ./build-vc.sh
+# WLAN: the n8 WL1271 (wlcore + firmware + NVS), on by default when the
+# firmware files are in WLAN_FW, WLAN=0 leaves it out
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -34,6 +36,13 @@ ROOTFS="$HERE/../../work/rootfs-alpine"
 "$HERE/../initramfs/alpine.sh" "$ROOTFS"
 
 WLAN_FW="${WLAN_FW:-$HERE/../../work/wlan/fw}"
+if [ -z "${WLAN:-}" ]; then
+	WLAN=1
+	for f in wl127x-fw-5-sr.bin wl127x-fw-5-mr.bin wl127x-nvs.bin; do
+		[ -f "$WLAN_FW/$f" ] || WLAN=0
+	done
+	[ "$WLAN" = 1 ] || echo "WLAN: no firmware/NVS in $WLAN_FW, building without it"
+fi
 if [ "${WLAN:-}" = 1 ]; then
 	for f in wl127x-fw-5-sr.bin wl127x-fw-5-mr.bin wl127x-nvs.bin; do
 		[ -f "$WLAN_FW/$f" ] || { echo "WLAN=1: missing $WLAN_FW/$f (linux-firmware ti-connectivity + tools/wl1271_nvs_convert.py)"; exit 1; }

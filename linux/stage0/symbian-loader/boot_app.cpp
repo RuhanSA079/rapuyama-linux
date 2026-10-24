@@ -359,29 +359,16 @@ GLDEF_C TInt E32Main(){
 #ifdef RB_WLAN_CLOCK
 	// n8: WL1271 reference clock (PRM 0x25) on + WLANENABLE high, so linux
 	// finds the chip powered and clocked. only logged, the boot goes on
-	// E:\\nowlanclk.txt skips it. one step per call, logged before and after,
-	// so a crash in symbian's power code leaves the step it died in last
-	if(Has(_L("E:\\nowlanclk.txt"))){
-		L(_L8("wlan clock: skipped (nowlanclk.txt)\n"));
+	// on by default, E:\\nowlan.txt skips it (linux then finds the WL1271 off
+	// and unclocked). one step per call, logged before and after, so a crash
+	// in symbian's power code leaves the step it died in last
+	if(Has(_L("E:\\nowlan.txt"))){
+		L(_L8("wlan clock: skipped (nowlan.txt)\n"));
 	}else{
 		const TInt steps[3]={1, 2, 4};
 		const char* names[3]={"register", "clock 0x25 on", "genio100 high"};
-		// E:\\wlansteps.txt "1" / "2" / "3": only the first n steps (default 3),
-		// to find which one makes the phone switch off after the jump
-		TInt n=3;
-		{
-			RFile f;
-			if(f.Open(gFs, _L("E:\\wlansteps.txt"), EFileRead)==KErrNone){
-				TBuf8<8> b;
-				f.Read(b);
-				f.Close();
-				TLex8 lx(b);
-				TInt v;
-				if(lx.Val(v)==KErrNone && v>=0 && v<=3){n=v;}
-			}
-		}
-		Lf(_L8("wlan clock: %d of 3 steps\n"), n);
-		for(TInt i=0; i<n; i++){
+		TInt done=0;
+		for(TInt i=0; i<3; i++){
 			TUint32 w[5]={0, 0, 0, 0, 0};
 			TPtr8 p((TUint8*)w, 0, sizeof(w));
 			Lf(_L8("wlan clock: %s ...\n"), names[i]);
@@ -389,10 +376,11 @@ GLDEF_C TInt E32Main(){
 			Lf(_L8("wlan clock: %s = %d (client %x gpio out %08x dir %08x)\n"),
 				names[i], rw, w[1], w[3], w[4]);
 			if(rw!=KErrNone){break;}
+			done++;
 		}
 		// the clock request goes to the modem as a message: give it time to
 		// act before symbian is gone
-		if(n>=2){
+		if(done>=2){
 			User::After(500000);
 			L(_L8("wlan clock: waited 500 ms\n"));
 		}

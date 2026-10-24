@@ -26,7 +26,7 @@
 	model = "Nokia N8-00 (RapuYama)";
 
 	chosen {
-		bootargs = "earlycon=ramcon,0x1f000000 keep_bootcon console=tty0 panic=10 nohlt clk_ignore_unused pd_ignore_unused cma=0 rootfstype=ramfs e6.usbsh e6.nogui videocore.debug=1 videocore.loader_b=1 videocore.dma=1 videocore.rgb565=1 videocore.panel=n8";
+		bootargs = "earlycon=ramcon,0x1f000000 keep_bootcon console=tty0 panic=10 nohlt clk_ignore_unused pd_ignore_unused cma=0 rootfstype=ramfs e6.usbsh e6.nogui videocore.debug=1 videocore.loader_b=1 videocore.dma=1 videocore.rgb565=1 videocore.panel=n8 wlcore.irq_poll_ms=10";
 	};
 	/* all keys go straight to gpios and switch to gnd (schematic p4).
 	 * polled, the gpio irq polarity is not known */
@@ -146,4 +146,77 @@
 
 &charger {
 	status = "disabled";
+};
+
+/*
+ * WLAN: TI WL1271 PG2.0 on spi2 (WSPI), verified 24.10.2026: firmware
+ * wl127x-fw-5-sr boots, scan, WPA2 connect, DHCP, internet. Needs:
+ * - n8boot's WLAN step before the jump (default on, E:\nowlan.txt skips it):
+ *   PowerResourceManager 0x25 = the 19.2 MHz reference clock the modem gates,
+ *   then genio100 high. Without it the chip id reads garbage
+ * - kernel patches 0008 (spi-rapuyama), 0009 (wl12xx binds the spi glue's
+ *   wl127x device), 0010 (32 bit words as byte frames), 0013 (wlcore
+ *   irq_poll_ms: the genio73 interrupt never reaches the cpu, the bootarg
+ *   above polls the chip's interrupt status every 10 ms instead)
+ * - firmware + the phone's own NVS (MAC, calibration) in the initramfs
+ *   (build-vc.sh, work/wlan/fw, not in git)
+ * - runtime PM off for the wlcore device (init does it): waking the chip
+ *   from ELP times out
+ * Evidence: work/spi-n8/NOTES.md, docs/n8-status.md
+ */
+/ {
+	clocks {
+		/* spi functional clock: spi2.dll FUN_801115c8 computes
+		 * sclk = 192000 kHz / 2 / (div + 1) */
+		spi_fclk: spi-fclk {
+			compatible = "fixed-clock";
+			#clock-cells = <0>;
+			clock-frequency = <192000000>;
+		};
+	};
+
+	/* wlanhpa.dll config 0x8038a0a4: enable = genio100, active high,
+	 * NKern::Sleep(12) after power on. always on: n8boot already powered
+	 * the chip with its clock, a power cycle in linux is not needed */
+	wlan_en: regulator-wlan-en {
+		compatible = "regulator-fixed";
+		regulator-name = "wlan-en";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+		gpio = <&gpio 100 0>;
+		enable-active-high;
+		startup-delay-us = <12000>;
+		regulator-boot-on;
+		regulator-always-on;
+	};
+};
+
+&{/soc} {
+	/* spi2.dll, the WLAN's controller. second reg = the block shared by
+	 * spi1/2/3 (0x804 = clock enable). polled driver */
+	spi2: spi@20020600 {
+		compatible = "nokia,rapuyama-spi";
+		reg = <0x20020600 0x80>, <0x20020800 0x40>;
+		/* resource 0x1c = cgc gate 0x0c (0x200330d0 bit 8) */
+		clocks = <&cgc 0x1c>, <&spi_fclk>;
+		clock-names = "ick", "fck";
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		wlan@0 {
+			compatible = "ti,wl1271";
+			reg = <0>;
+			/* 1 and 8 MHz verified (8: firmware upload 0.45 s) */
+			spi-max-frequency = <8000000>;
+			/* WLAN_IRQ = genio73. it never delivers the firmware's
+			 * events (rising fires only on release, falling and
+			 * level low never), wlcore.irq_poll_ms does the work.
+			 * kept as a harmless extra */
+			interrupts-extended = <&gpio 73 1>;
+			vwlan-supply = <&wlan_en>;
+			/* the phone's INI: ref_clock 2 = 38.4 MHz; wl12xx sends
+			 * this, not the NVS value (19.2: the scan hears nothing) */
+			ref-clock-frequency = <38400000>;
+		};
+	};
 };
