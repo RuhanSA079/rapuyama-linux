@@ -1,8 +1,8 @@
 ---
  drivers/tty/serial/Kconfig         |  10 +
  drivers/tty/serial/Makefile        |   1 +
- drivers/tty/serial/rapuyama_uart.c | 564 ++++++++++
- 3 files changed, 575 insertions(+)
+ drivers/tty/serial/rapuyama_uart.c | 543 ++++++++++
+ 3 files changed, 554 insertions(+)
  create mode 100644 drivers/tty/serial/rapuyama_uart.c
 
 diff --git a/drivers/tty/serial/Kconfig b/drivers/tty/serial/Kconfig
@@ -40,10 +40,10 @@ index 6954aa468..766288a3a 100644
  # These Sparc drivers have to appear before others such as 8250
 diff --git a/drivers/tty/serial/rapuyama_uart.c b/drivers/tty/serial/rapuyama_uart.c
 new file mode 100644
-index 000000000..156e6a19b
+index 000000000..fd084faba
 --- /dev/null
 +++ b/drivers/tty/serial/rapuyama_uart.c
-@@ -0,0 +1,636 @@
+@@ -0,0 +1,614 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Nokia RapuYama UART (N8/E6/E7/C7), the port the bluetooth chip hangs off
@@ -90,7 +90,8 @@ index 000000000..156e6a19b
 +#define RY_UART_RX_LEVEL	0x2c	/* words waiting in the rx fifo */
 +#define RY_UART_IRQ_STATUS	0x34	/* bits 0..3 */
 +#define RY_UART_IRQ_MASK	0x38
-+#define RY_UART_SPECIAL		0x3c
++#define RY_UART_CLKRATE		0x3c	/* input clock to the baud generator, Hz */
++#define RY_UART_REG48		0x48
 +#define RY_UART_DIV_D		0x5c
 +#define RY_UART_FRAC_A		0x60
 +#define RY_UART_RX		0x64	/* data in 0..7, errors in 8..11 */
@@ -147,9 +148,9 @@ index 000000000..156e6a19b
 +module_param(set_line, bool, 0644);
 +MODULE_PARM_DESC(set_line, "program 8N1 at startup (+0x14/+0x18/+0x1c), as the firmware's line config does; the baud divider is left alone");
 +
-+static bool enable_block;
++static bool enable_block = true;
 +module_param(enable_block, bool, 0644);
-+MODULE_PARM_DESC(enable_block, "write tx+rx enable at startup when the firmware left the block off");
++MODULE_PARM_DESC(enable_block, "run the firmware's power-on tail at startup: irq mask, +0x3c clock rate, +0x48, tx+rx enable (the block is handed over disabled)");
 +
 +static bool reconfigure;
 +module_param(reconfigure, bool, 0644);
@@ -193,9 +194,9 @@ index 000000000..156e6a19b
 +	u32 a = (q - 3) >> 1;
 +
 +	if (baud == 921600)
-+		ry_wr(port, RY_UART_SPECIAL, 0);
++		ry_wr(port, RY_UART_CLKRATE, 0);
 +	else if (baud == 120000)
-+		ry_wr(port, RY_UART_SPECIAL, 0x7fffff);
++		ry_wr(port, RY_UART_CLKRATE, 0x7fffff);
 +
 +	ry_wr(port, RY_UART_DIV_A, a);
 +	ry_wr(port, RY_UART_DIV_D, a / 5);
@@ -380,54 +381,31 @@ index 000000000..156e6a19b
 +	 * Switching it on is two registers and does not touch the baud
 +	 * divider, which is the part the firmware notes say can fault.
 +	 */
-+	if (!(ry_rd(port, RY_UART_ENABLE) & RY_UART_TX_RX_ON)) {
-+		dev_warn(port->dev, "tx/rx not enabled (%08x), bluetooth off in symbian?%s\n",
-+			 ry_rd(port, RY_UART_ENABLE),
-+			 enable_block ? " switching it on" : "");
-+		if (enable_block) {
-+			unsigned int spin = 100000;
-+
-+			while (ry_rd(port, RY_UART_BUSY) && --spin)
-+				cpu_relax();
-+			ry_wr(port, RY_UART_LOCK, 1);
-+			ry_wr(port, RY_UART_ENABLE, RY_UART_TX_RX_ON);
-+			ry_wr(port, RY_UART_LOCK, 0);
-+			dev_info(port->dev, "enable now %08x\n",
-+				 ry_rd(port, RY_UART_ENABLE));
-+		}
-+	}
 +	/*
-+	 * The block is handed over disabled, so the line registers could be
-+	 * anything. bc02_uart1 FUN_8018f3f0 programs them for every config:
-+	 * +0x14 = 7 (8 data bits, 6 = 7 bits), +0x18 = 0 (no parity),
-+	 * +0x1c = 0 (stop). It takes the +0x04 lock around the whole thing,
-+	 * and enables the block itself if +0x84 reads 0. The baud divider is
-+	 * deliberately not touched here: see reconfigure=1.
++	 * The tail of bc02_uart1's power-on (FUN_8018c554), in its order. The
++	 * block arrives disabled even with bluetooth on in Symbian, and the
++	 * two registers we used to leave alone are what the transmitter needs:
++	 * +0x3c is the input clock to the baud generator in Hz (REF/2), and
++	 * the firmware writes it immediately before enabling tx/rx. Without it
++	 * the fifo accepts bytes and nothing is ever shifted out, which is
++	 * exactly what the phone showed.
++	 *
++	 * Note the firmware sets +0x04 to 1 here and leaves it there; it is
++	 * only used as a mutex by the line config, not cleared after enabling.
 +	 */
-+	if (set_line) {
++	if (enable_block) {
 +		unsigned int spin = 100000;
 +
 +		while (ry_rd(port, RY_UART_BUSY) && --spin)
 +			cpu_relax();
 +		ry_wr(port, RY_UART_LOCK, 1);
-+		ry_wr(port, RY_UART_BITS, RY_UART_BITS_8);
-+		ry_wr(port, RY_UART_PARITY, 0);
-+		ry_wr(port, RY_UART_PARITY_TYPE, 0);
-+		ry_wr(port, RY_UART_LOCK, 0);
-+		dev_info(port->dev, "line 8N1: bits %u parity %u stop %u\n",
-+			 ry_rd(port, RY_UART_BITS), ry_rd(port, RY_UART_PARITY),
-+			 ry_rd(port, RY_UART_PARITY_TYPE));
-+	}
-+	if (pinmux && ry->mux) {
-+		/* bc02_uart1 FUN_8018c554, in this order */
-+		writel(0x10000000, ry->mux + RY_MUX_864);
-+		writel(0x60000000, ry->mux + RY_MUX_868);
-+		writel(6, ry->mux + RY_MUX_878);
-+		writel(1, ry->mux + RY_MUX_874);
-+		writel(0x600, ry->mux + RY_MUX_878);
-+		writel(0x100, ry->mux + RY_MUX_874);
-+		dev_info(port->dev, "pads to uart mode: +868 %08x +870 %08x\n",
-+			 readl(ry->mux + RY_MUX_868), readl(ry->mux + RY_MUX_870));
++		ry_wr(port, RY_UART_IRQ_MASK, irq_mask);
++		ry_wr(port, RY_UART_CLKRATE, RY_UART_REF / 2);
++		ry_wr(port, RY_UART_REG48, 0);
++		ry_wr(port, RY_UART_ENABLE, RY_UART_TX_RX_ON);
++		dev_info(port->dev, "enable %08x clkrate %u busy %u room %u\n",
++			 ry_rd(port, RY_UART_ENABLE), ry_rd(port, RY_UART_CLKRATE),
++			 ry_rd(port, RY_UART_BUSY), ry_rd(port, RY_UART_TX_ROOM));
 +	}
 +	/* masked since probe; drop anything latched before we listen */
 +	ry_wr(port, RY_UART_IRQ_MASK, 0);

@@ -34,8 +34,8 @@ for a in 20031864 20031868 20031870 20031874 20031878 2003187c; do
 	printf '  0x%s = %s\n' "$a" "$(devmem 0x$a 32 2>/dev/null)"
 done
 
-say "uart registers (04 lock, 34 irq status, 38 irq mask, 84 enable, 9c busy, a0 tx room, 2c rx level)"
-for off in 04 2c 34 38 84 9c a0; do
+say "uart registers (04 active, 2c rx level, 30 ?, 34 irq status, 38 irq mask, 3c clock rate, 48 ?, 84 enable, 9c busy, a0 tx room)"
+for off in 04 2c 30 34 38 3c 48 84 9c a0; do
 	printf '  +0x%s = %s\n' "$off" "$(devmem $((0x20025a00 + 0x$off)) 32 2>/dev/null)"
 done
 
