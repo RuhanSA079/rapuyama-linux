@@ -16,6 +16,7 @@
 #   va_guest  0xc6800000 0x280000  isasw data: token c6818880, heap head c68189c4,
 #                                  PA handle c680b244, task stacks
 #   va_pool   0xc6a80000 0x80000   the secure buffer pool c6af202c..c6af8000
+#   va_pa     0x90440000 0x10000   the PA table (*(c68189c4 + 4) = 90443000)
 #   va_code   0xc6300000 0x100000  the isa code (cross-check with code.bin)
 L1=0x1f0f2000	# isah phys 0x1f0f1000 + 0x1000: Symbian's kernel L1 at the jump
 [ "$(physdump 0x1f0f1000 4 | od -An -tx4 | tr -d ' ')" = 48415349 ] ||
@@ -33,7 +34,7 @@ if [ "$OUT" = sd ]; then
 	OUT=/mnt/sd/swd
 fi
 
-REGIONS="va_guest:0xc6800000:0x280000 va_pool:0xc6a80000:0x80000 va_code:0xc6300000:0x100000"
+REGIONS="va_guest:0xc6800000:0x280000 va_pool:0xc6a80000:0x80000 va_pa:0x90440000:0x10000 va_code:0xc6300000:0x100000"
 
 if [ -n "$OUT" ]; then
 	mkdir -p "$OUT" || exit 1
