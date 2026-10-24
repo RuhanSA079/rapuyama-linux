@@ -76,13 +76,17 @@ irqs
 ip link show wlan0
 iw dev wlan0 info
 
-echo "== scan"
-iw dev wlan0 scan > /tmp/scan.txt 2>&1
-echo "exit $?"
-grep -E "^BSS|SSID:|signal:|freq:" /tmp/scan.txt | head -60
-dmesg -c | grep -v videocore
-echo "== irq after scan"
-irqs
+# with an ssid wpa_supplicant scans itself: skip the separate scan, the
+# secure watchdog resets the phone ~60-90 s after the jump
+if [ -z "$SSID" ]; then
+	echo "== scan"
+	iw dev wlan0 scan > /tmp/scan.txt 2>&1
+	echo "exit $?"
+	grep -E "^BSS|SSID:|signal:|freq:" /tmp/scan.txt | head -60
+	dmesg -c | grep -v videocore
+	echo "== irq after scan"
+	irqs
+fi
 
 if [ -n "$SSID" ]; then
 	echo "== connect to $SSID"
@@ -95,7 +99,7 @@ if [ -n "$SSID" ]; then
 		echo "}"
 	} > /tmp/wpa.conf
 	wpa_supplicant -B -i wlan0 -D nl80211 -c /tmp/wpa.conf
-	for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+	for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
 		sleep 2
 		st=$(wpa_cli -p /run/wpa -i wlan0 status | sed -n 's/^wpa_state=//p')
 		echo "  $st"
