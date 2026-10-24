@@ -4,12 +4,16 @@
 # wspitest once per io32 / rxen combination with the driver's register
 # dumps (debug=2), the kernel log of each run right after it.
 #
-#   spitest          at 1 MHz
-#   spitest 100000   at another speed
+#   spitest          the working settings (io32=0 rxen=0) at 1 MHz, no
+#                    register dumps: quick, done well before the watchdog
+#   spitest 100000   the same at another speed
+#   spitest all [hz] every io32 / rxen combination with register dumps
 #
-# needs n8-spi.dtb as E:\n8.dtb and WLAN on in Symbian before the jump (the
-# modem switches the WL1271's 19.2 MHz reference clock). capture the whole
-# output (serial terminal log)
+# needs n8-spi.dtb as E:\n8.dtb. the WL1271 19.2 MHz reference clock comes from
+# the modem: n8boot requests it before the jump (E:\wlansteps.txt). capture the
+# whole output (serial terminal log)
+ALL=
+[ "$1" = all ] && { ALL=1; shift; }
 HZ="${1:-1000000}"
 P=/sys/module/spi_rapuyama/parameters
 EN=612	# genio100 = gpiochip base 512 + 100
@@ -39,8 +43,15 @@ DEV=$(ls /dev/spidev* 2>/dev/null | head -1)
 [ -n "$DEV" ] || { echo "spidev didn't bind to $D"; exit 1; }
 echo "$D -> $DEV"
 
-echo 2 > $P/debug
-for combo in "0 0" "1 0" "0 7" "1 7"; do
+if [ -n "$ALL" ]; then
+	COMBOS="0_0 1_0 0_7 1_7"
+	echo 2 > $P/debug
+else
+	COMBOS="0_0"
+	echo 0 > $P/debug
+fi
+for combo in $COMBOS; do
+	combo=$(echo $combo | tr _ ' ')
 	set -- $combo
 	echo
 	echo "=========== io32=$1 rxen=$2 at $HZ Hz"
