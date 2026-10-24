@@ -32,8 +32,8 @@ Opt in with e6.swd=1 (work/dts-test/n8-swd.dts); untested on the phone.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 ---
- arch/arm/mach-rapuyama/secure_wdt.c | 206 +++++++---
- 1 file changed, 178 insertions(+), 28 deletions(-)
+ arch/arm/mach-rapuyama/secure_wdt.c | 210 +++++++---
+ 1 file changed, 182 insertions(+), 28 deletions(-)
 
 --- a/arch/arm/mach-rapuyama/secure_wdt.c
 +++ b/arch/arm/mach-rapuyama/secure_wdt.c
@@ -78,7 +78,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
  #define IDENT_ATTR	0x1c0e
  
  /* offsets are shared with secure_wdt_call.S */
-@@ -27,6 +41,83 @@
+@@ -27,6 +41,87 @@
  	u32 sctlr, guest_sctlr;
  };
  
@@ -99,8 +99,12 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 +	u32 token_lit_off;
 +	/* literals that pin the data layout, checked but not otherwise used */
 +	u32 lit_off[4], lit_val[4];
-+	/* transport object VA; its first word points into the buffer pool while
-+	 * the ISA side is live, which is how we know the state survived
++	/*
++	 * transport object VA; its first word points into the buffer pool
++	 * while the ISA side is live, which is how we know the state survived.
++	 * pool_lo/hi are the pool *region*, not the ROM's own bound: that
++	 * literal (checked in lit_val) is where user data starts, 12 bytes
++	 * past the block header this word actually points at.
 +	 */
 +	u32 transport_va, pool_lo, pool_hi;
 +	/* isah hook words, 0 = do not check (the N8 ones point into Symbian,
@@ -149,7 +153,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 +		.lit_off = { 0x642a0, 0x642a4, 0x62c84, 0x62c8c },
 +		.lit_val = { 0xc6af202c, 0xc6af8000, 0xc680b244, 0xc68189c4 },
 +		.transport_va = 0xc68189c4,
-+		.pool_lo = 0xc6af202c, .pool_hi = 0xc6af8000,
++		.pool_lo = 0xc6af2000, .pool_hi = 0xc6af8000,
 +		/*
 +		 * 60 KB of the data region read all zero in every dump
 +		 * (0xc68d1000..0xc68e0000); take the top 16 KB of it, which
@@ -162,7 +166,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
  extern void rapuyama_swd_call(struct swd_call *call);
  extern void rapuyama_note(const char *fmt, ...);
  
-@@ -98,38 +189,101 @@
+@@ -98,38 +193,101 @@
  	schedule_delayed_work(&swd_work, (timeout - 30) * HZ);
  }
  
@@ -281,7 +285,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
  		goto out;
  	swd_pgd = (u32 *)__get_free_pages(GFP_KERNEL | __GFP_ZERO, 2);
  	swd = (struct swd_call *)get_zeroed_page(GFP_KERNEL);
-@@ -148,13 +302,13 @@
+@@ -148,13 +306,13 @@
  	swd->guest_nmrr = h[9];
  	swd->guest_sctlr = h[7];
  	swd->guest_sp = sp;
@@ -301,7 +305,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
  	schedule_delayed_work(&swd_work, 5 * HZ);
  	ret = 0;
  out:
-@@ -169,6 +323,8 @@
+@@ -169,6 +327,8 @@
  			free_pages((unsigned long)swd_pgd, 2);
  		if (swd)
  			free_page((unsigned long)swd);
