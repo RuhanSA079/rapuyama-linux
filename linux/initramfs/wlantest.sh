@@ -30,17 +30,13 @@ reprobe() {
 	sleep 5
 	dmesg -c | grep -v videocore
 }
-W=/sys/module/wlcore/parameters/debug_level
 if [ ! -d /sys/class/net/wlan0 ]; then
-	# DEBUG_SPI | DEBUG_BOOT | DEBUG_PROBE: every busy word / register read
-	echo $((0x40006)) > $W
-	reprobe "w32frame=$(cat /sys/module/spi_rapuyama/parameters/w32frame), spi debug"
+	reprobe "again, w32frame=$(cat /sys/module/spi_rapuyama/parameters/w32frame)"
 fi
 if [ ! -d /sys/class/net/wlan0 ]; then
 	echo 16 > /sys/module/spi_rapuyama/parameters/w32frame
-	reprobe "w32frame=16 (halfword frames), spi debug"
+	reprobe "w32frame=16 (halfword frames)"
 fi
-echo $((0x40004)) > $W
 if [ ! -d /sys/class/net/wlan0 ]; then
 	echo "no wlan0: wlcore didn't probe (log above)"
 	echo "== wlan platform devices"
