@@ -1083,6 +1083,11 @@ TInt DRunBlobChan::Request(TInt aFunction, TAny* a1, TAny* a2){
 		typedef TInt (*TPrmChange)(TUint aClientId, TUint aResourceId, TInt aState, TAny* aCb, TAny* a5);
 		const TUint32 KPrmRegister=0x800c1c3cu, KPrmChange=0x800c1d48u;
 		const TUint KRes19M2=0x25;
+		// one step per call (a2), so the app can log between them: a crash
+		// inside symbian's power code shows up as the last logged step
+		const TInt step=(TInt)a2;
+		static TUint wlanClient=0;
+		static TBool wlanRegistered=EFalse;
 		TUint32 out[5]={0, 0, 0, 0, 0};
 		TInt r=KErrNone;
 		// this firmware only: the two exports' first instructions, wlanhpa's
@@ -1093,24 +1098,24 @@ TInt DRunBlobChan::Request(TInt aFunction, TAny* a1, TAny* a2){
 			|| RB_ROM(0x8038a0b0u)!=10 || RB_ROM(0x8038a0b4u)!=0x4e414c57u){ // "WLAN"
 			r=KErrNotSupported;
 		}
-		if(r==KErrNone){
+		if(r==KErrNone && step==1 && !wlanRegistered){
 			_LIT8(KClient, "RunBlobWlanClk");
-			TUint client=0;
 			NKern::ThreadEnterCS();
-			TInt rr=((TPrmRegister)KPrmRegister)(client, KClient);
-			out[0]=(TUint32)rr;
-			out[1]=client;
-			if(rr==KErrNone){
-				TInt rc=((TPrmChange)KPrmChange)(client, KRes19M2, 1, NULL, NULL);
-				out[2]=(TUint32)rc;
-				if(rc!=KErrNone){r=rc;}
-			}else{
-				r=rr;
-			}
+			r=((TPrmRegister)KPrmRegister)(wlanClient, KClient);
 			NKern::ThreadLeaveCS();
-			// genio100 high even if the clock request failed: the chip
-			// powered is still the better state for linux
-			// the c6 peripheral window, phys 0x20031900
+			if(r==KErrNone){wlanRegistered=ETrue;}
+		}else if(r==KErrNone && step==2){
+			if(!wlanRegistered){
+				r=KErrNotReady;
+			}else{
+				NKern::ThreadEnterCS();
+				r=((TPrmChange)KPrmChange)(wlanClient, KRes19M2, 1, NULL, NULL);
+				NKern::ThreadLeaveCS();
+			}
+		}else if(r==KErrNone && step==4){
+			// genio100 high (output level first, then direction, as
+			// gpio-rapuyama does: bank 3 bit 4) through the c6 window,
+			// phys 0x20031900
 			volatile TUint32* b=(volatile TUint32*)0xc6031900u;
 			b[0xc4/4]=1u<<4; // RY_OUT(3) + SET
 			b[0x128/4]=1u<<4; // RY_IN(3) + DIR_OUT
@@ -1118,6 +1123,8 @@ TInt DRunBlobChan::Request(TInt aFunction, TAny* a1, TAny* a2){
 			out[4]=b[0x120/4];
 			NKern::Sleep(NKern::TimerTicks(20));
 		}
+		out[0]=(TUint32)r;
+		out[1]=wlanClient;
 #undef RB_ROM
 		TPtrC8 src((const TUint8*)out, sizeof(out));
 		TInt rw=Kern::ThreadDesWrite(&Kern::CurrentThread(), a1, src, 0);

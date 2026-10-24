@@ -150,7 +150,8 @@ class RRunBlob : public RBusLogicalChannel{
 		// N8 only: PRM resource 0x25 (WL1271 19.2 MHz clock) on + genio100
 		// high, like wlanhpa's power on. aBuf gets 5 words: register result,
 		// client id, change result, gpio out register, gpio dir register
-		TInt WlanClock(TDes8& aBuf){return DoControl(EControlWlanClock, (TAny*)&aBuf);}
+		// aStep: 1 = rom check + RegisterClient, 2 = ChangeResourceState, 4 = genio100 high
+		TInt WlanClock(TDes8& aBuf, TInt aStep){return DoControl(EControlWlanClock, (TAny*)&aBuf, (TAny*)aStep);}
 
 		// patch karap's cbus-write fn 0x800b8494 to log every PMIC/CBUS write
 		// {dev,reg,val} into a ram ring (ring[0]=count, 16-byte slots at +4).
