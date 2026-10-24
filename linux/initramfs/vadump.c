@@ -195,8 +195,9 @@ void main_args(u32 *sp)
 	l1 = parse(argv[a]);
 	va = parse(argv[a + 1]);
 	len = parse(argv[a + 2]);
-	if ((l1 & 0x3fff) || !in_ram(l1))
-		fail("vadump: the l1 copy must be 16 KB aligned and in ram\n");
+	/* a copy, not the live table: word alignment is enough */
+	if ((l1 & 3) || !in_ram(l1))
+		fail("vadump: the l1 copy must be word aligned and in ram\n");
 	if ((va | len) & (PAGE - 1))
 		fail("vadump: va and length must be 4 KB aligned\n");
 	fd = (s32)syscall3(SYS_open, (u32)"/dev/mem", O_RDONLY, 0);
