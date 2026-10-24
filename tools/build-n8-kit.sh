@@ -65,7 +65,7 @@ sed -E -e "s#^(file /bin/busybox ).*( 755 0 0)#\1$BB\2#" \
 	"$ROOT/linux/initramfs/initramfs.list" > "$KOUT/initramfs.list"
 
 # input / sensor test tools (linux/initramfs/{keytest,touchtest}.c, sensortest.sh)
-for t in keytest touchtest physdump fbtouch wspitest vadump; do
+for t in keytest touchtest physdump fbtouch wspitest vadump nvsget; do
 	arm-linux-gnu-gcc -march=armv6k -marm -static -nostdlib -fno-pie -no-pie \
 		-ffreestanding -fno-builtin -fomit-frame-pointer -fno-stack-protector \
 		-Os -Wall -Wextra -Werror \
@@ -82,6 +82,7 @@ done
 	printf 'file /usr/bin/swddump %s 755 0 0\n' "$ROOT/linux/initramfs/swddump.sh"
 	printf 'file /usr/bin/spitest %s 755 0 0\n' "$ROOT/linux/initramfs/spitest.sh"
 	printf 'file /usr/bin/vadump %s 755 0 0\n' "$KOUT/rootfs-extra/vadump"
+	printf 'file /usr/bin/nvsget %s 755 0 0\n' "$KOUT/rootfs-extra/nvsget"
 	printf 'file /usr/bin/swdvadump %s 755 0 0\n' "$ROOT/linux/initramfs/swdvadump.sh"
 	printf 'dir /usr/share 755 0 0\ndir /usr/share/udhcpc 755 0 0\n'
 	printf 'file /usr/share/udhcpc/default.script %s 755 0 0\n' "$ROOT/linux/initramfs/udhcpc.script"
@@ -113,10 +114,19 @@ DTS="$PHONE-usb"
 	-o "$KOUT/$PHONE.dtb" "$ROOT/linux/boot/$DTS.dts"
 
 echo ">> loader"
+# n8: the helper n8wlnv.exe goes into n8boot.sis. it reads the phone's WL1271
+# NVS through wlanhwinit.dll (all-tcb, C++ exceptions: drtaeabi + the GCC
+# personality routine, like wldump)
+G="$ROOT/tools/gcce/arm-2012.03"
+N8WLNV=()
+[ "$PHONE" = n8 ] && N8WLNV=(EXTRA_NAME=n8wlnv EXTRA_SRC=n8wlnv_app.cpp
+	EXTRA_UID=0xe1000058 EXTRA_CAPS=all-tcb EXTRA_CXXFLAGS=-fexceptions
+	"EXTRA_LIBS=$ROOT/driver/import/wlanhwinit.dso $ROOT/driver/import/euser_full.dso $ROOT/driver/import/drtaeabi.dso $ROOT/driver/import/scppnwdl.dso $G/arm-none-symbianelf/lib/libsupc++.a $G/lib/gcc/arm-none-symbianelf/4.6.3/libgcc_eh.a")
 (cd "$ROOT/linux/stage0/symbian-loader" &&
 	# e6bfix with its own name, uid and dtb: <phone>boot reads E:\<phone>.dtb
-	# n8: also switches the WL1271's 19.2 MHz clock on before the jump
-	RB_DEFS="-DRB_IMAGE_BOOT -DRB_DTB=\"$PHONE\"$([ "$PHONE" = n8 ] && echo ' -DRB_WLAN_CLOCK')" \
+	# n8: also switches the WL1271's 19.2 MHz clock on before the jump and
+	# leaves the phone's NVS for linux
+	env "${N8WLNV[@]}" RB_DEFS="-DRB_IMAGE_BOOT -DRB_DTB=\"$PHONE\"$([ "$PHONE" = n8 ] && echo ' -DRB_WLAN_CLOCK')" \
 		./build_app.sh "${PHONE}boot" boot_app.cpp "$BOOT_UID" &&
 	./build_app.sh e6logs ramread_app.cpp 0xe1000022)
 

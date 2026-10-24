@@ -76,6 +76,25 @@ fi
 [ -f /swapfile ] && swapon -p 10 /swapfile 2>/dev/kmsg
 log "swap: $(grep -v ^Filename /proc/swaps | awk '{printf "%s %s kB, ", $1, $3}')"
 
+# n8 WLAN: the phone's own NVS (calibration + MAC), left by n8boot at the
+# handoff (nvsget.c). wlcore read its NVS at probe already (a built-in one
+# from the kit, or none), so rebind it to load this one
+if command -v nvsget > /dev/null && [ -d /sys/bus/spi/drivers/wl1271_spi ]; then
+	mkdir -p /lib/firmware/ti-connectivity
+	if msg=$(nvsget /lib/firmware/ti-connectivity/wl127x-nvs.bin); then
+		log "wlan: $msg"
+		for d in /sys/bus/spi/drivers/wl1271_spi/spi*; do
+			[ -e "$d" ] || continue
+			d=${d##*/}
+			echo "$d" > /sys/bus/spi/drivers/wl1271_spi/unbind
+			echo "$d" > /sys/bus/spi/drivers/wl1271_spi/bind
+			log "wlan: $d rebound with the phone's NVS"
+		done
+	else
+		log "wlan: $msg (keeping the built-in NVS, if any)"
+	fi
+fi
+
 # n8 WLAN (TI WL1271, wlcore): keep the chip out of ELP sleep, waking it
 # times out on the N8. wlcore enters ELP through runtime PM
 for d in /sys/bus/platform/devices/wl1*; do

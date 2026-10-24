@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # kernel + dtb with the VideoCore display driver (CONFIG_SOC_RAPUYAMA_VIDEOCORE)
 # usage: KERN_BIN=/path/to/kern.bin [WLAN=0|1] [DEVMEM_ALL=1] ./build-vc.sh
-# WLAN: the n8 WL1271 (wlcore + firmware + NVS), on by default when the
-# firmware files are in WLAN_FW, WLAN=0 leaves it out
+# WLAN: the n8 WL1271 (wlcore + TI firmware), on by default when the TI
+# firmware (wl127x-fw-5-sr/mr.bin, linux-firmware) is in WLAN_FW, WLAN=0
+# leaves it out. The NVS (calibration + MAC) is per phone: n8boot reads the
+# phone's own at every boot and init loads it (nvsget), so WLAN_FW needs no
+# wl127x-nvs.bin; one there goes in as the fallback for an n8boot without it
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -38,15 +41,17 @@ ROOTFS="$HERE/../../work/rootfs-alpine"
 WLAN_FW="${WLAN_FW:-$HERE/../../work/wlan/fw}"
 if [ -z "${WLAN:-}" ]; then
 	WLAN=1
-	for f in wl127x-fw-5-sr.bin wl127x-fw-5-mr.bin wl127x-nvs.bin; do
+	for f in wl127x-fw-5-sr.bin wl127x-fw-5-mr.bin; do
 		[ -f "$WLAN_FW/$f" ] || WLAN=0
 	done
-	[ "$WLAN" = 1 ] || echo "WLAN: no firmware/NVS in $WLAN_FW, building without it"
+	[ "$WLAN" = 1 ] || echo "WLAN: no TI firmware in $WLAN_FW, building without it"
 fi
 if [ "${WLAN:-}" = 1 ]; then
-	for f in wl127x-fw-5-sr.bin wl127x-fw-5-mr.bin wl127x-nvs.bin; do
-		[ -f "$WLAN_FW/$f" ] || { echo "WLAN=1: missing $WLAN_FW/$f (linux-firmware ti-connectivity + tools/wl1271_nvs_convert.py)"; exit 1; }
+	for f in wl127x-fw-5-sr.bin wl127x-fw-5-mr.bin; do
+		[ -f "$WLAN_FW/$f" ] || { echo "WLAN=1: missing $WLAN_FW/$f (linux-firmware ti-connectivity)"; exit 1; }
 	done
+	[ -f "$WLAN_FW/wl127x-nvs.bin" ] && echo "WLAN: built-in NVS fallback from $WLAN_FW" ||
+		echo "WLAN: no built-in NVS, n8boot's (nvsget) only"
 fi
 
 # the checked-in list has absolute paths from the author's machine: point
@@ -61,7 +66,7 @@ sed -E -e "s#^(file /bin/busybox ).*( 755 0 0)#\1$(realpath "$HERE/../../work/dl
 	"$HERE/../initramfs/initramfs.list" > "$KOUT/initramfs.list"
 
 # input / sensor test tools (linux/initramfs/{keytest,touchtest}.c, sensortest.sh)
-for t in keytest touchtest physdump fbtouch wspitest vadump; do
+for t in keytest touchtest physdump fbtouch wspitest vadump nvsget; do
 	arm-linux-gnu-gcc -march=armv6k -marm -static -nostdlib -fno-pie -no-pie \
 		-ffreestanding -fno-builtin -fomit-frame-pointer -fno-stack-protector \
 		-Os -Wall -Wextra -Werror \
@@ -81,6 +86,7 @@ done
 	printf 'file /usr/bin/swddump %s 755 0 0\n' "$HERE/../initramfs/swddump.sh"
 	printf 'file /usr/bin/spitest %s 755 0 0\n' "$HERE/../initramfs/spitest.sh"
 	printf 'file /usr/bin/vadump %s 755 0 0\n' "$KOUT/rootfs-extra/vadump"
+	printf 'file /usr/bin/nvsget %s 755 0 0\n' "$KOUT/rootfs-extra/nvsget"
 	printf 'file /usr/bin/swdvadump %s 755 0 0\n' "$HERE/../initramfs/swdvadump.sh"
 	printf 'dir /usr/share/udhcpc 755 0 0\n'
 	printf 'file /usr/share/udhcpc/default.script %s 755 0 0\n' "$HERE/../initramfs/udhcpc.script"
@@ -98,11 +104,12 @@ done
 	printf 'file /etc/e6-check.sh %s 755 0 0\n' "$HERE/../initramfs/e6-check.sh"
 	printf 'file /etc/fonts/local.conf %s 644 0 0\n' "$HERE/../initramfs/fonts-local.conf"
 	printf 'file /usr/bin/wlantest %s 755 0 0\n' "$HERE/../initramfs/wlantest.sh"
-	# WLAN=1: n8 WLAN firmware + NVS (MAC, calibration) from WLAN_FW, default
-	# work/wlan/fw (not in git: the NVS is per phone, see docs/n8-hardware.md)
+	# WLAN=1: n8 WLAN firmware from WLAN_FW (default work/wlan/fw), plus a
+	# fallback NVS if one is there (per phone, not in git, see the top)
 	if [ "${WLAN:-}" = 1 ]; then
 		printf 'dir /lib/firmware/ti-connectivity 755 0 0\n'
 		for f in wl127x-fw-5-sr.bin wl127x-fw-5-mr.bin wl127x-nvs.bin; do
+			[ -f "$WLAN_FW/$f" ] || continue
 			printf 'file /lib/firmware/ti-connectivity/%s %s 644 0 0\n' "$f" "$WLAN_FW/$f"
 		done
 	fi

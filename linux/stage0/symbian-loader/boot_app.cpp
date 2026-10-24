@@ -14,6 +14,9 @@
 #include <e32svr.h>
 #include <u32hal.h>
 #include "runblob.h"
+#ifdef RB_WLAN_CLOCK
+#include "n8nvs.h"
+#endif
 
 _LIT(KLog, "E:\\boot.log");
 #ifdef RB_IMAGE_BOOT
@@ -121,6 +124,80 @@ static void Blank(){
 	TInt r=UserSvr::HalFunction(EHalGroupDisplay, EDisplayHalSetState, (TAny*)EFalse, NULL);
 	Lf(_L8("display off=%d\n"), r);
 }
+
+#ifdef RB_WLAN_CLOCK
+// N8 WLAN NVS for linux: the helper n8wlnv.exe (same sis) asks wlanhwinit.dll
+// for the WL1271 NVS + MAC and converts it (n8nvs.h) into D:\n8wlnv.bin; the
+// boot leaves it for linux at phys 0x1f0f6000 (runblob_ldd.cpp, written with
+// irqs off right before the jump). block, all u32 little endian:
+//   +0 magic 'N8NV' (0x564e384e)  +4 version 1  +8 length (912)
+//   +12 crc32 (zlib) of the data  +16 the data (wl127x-nvs.bin)
+// linux: linux/initramfs/nvsget.c. no NVS = a zero header there
+_LIT(KNvsHelper, "n8wlnv.exe");
+_LIT(KNvsBin, "D:\\n8wlnv.bin");
+_LIT(KNvsTxt, "D:\\n8wlnv.txt");
+const TUint32 KNvsMagic=0x564e384e;
+static TUint8 gNvsBlock[16+N8NVS_OUT_LEN];
+
+static void Put32(TUint8* p, TUint32 v){p[0]=v; p[1]=v>>8; p[2]=v>>16; p[3]=v>>24;}
+
+// the helper's status lines into boot.log, then gone from D:
+static void CopyHelperLog(){
+	RFile f;
+	if(f.Open(gFs, KNvsTxt, EFileRead)==KErrNone){
+		TBuf8<512> b;
+		f.Read(b);
+		f.Close();
+		L(b);
+	}
+	gFs.Delete(KNvsTxt);
+}
+
+// runs the helper (10 s at most), returns the block length (0 = none)
+static TInt WlanNvs(){
+	RProcess p;
+	TInt r=p.Create(KNvsHelper, KNullDesC);
+	if(r==KErrNone){
+		TRequestStatus st, ts;
+		RTimer t;
+		t.CreateLocal();
+		p.Logon(st);
+		p.Resume();
+		t.After(ts, 10000000);
+		User::WaitForRequest(st, ts);
+		if(st==KRequestPending){
+			L(_L8("wlan nvs: helper timed out, killed\n"));
+			p.Kill(KErrTimedOut);
+			User::WaitForRequest(st);
+		}else{
+			t.Cancel();
+			User::WaitForRequest(ts);
+		}
+		r=(p.ExitType()==EExitKill) ? p.ExitReason() : KErrDied;
+		t.Close();
+		p.Close();
+	}
+	Lf(_L8("wlan nvs: helper n8wlnv=%d\n"), r);
+	CopyHelperLog();
+	TInt len=0;
+	RFile f;
+	if(r==KErrNone && f.Open(gFs, KNvsBin, EFileRead)==KErrNone){
+		TPtr8 d(gNvsBlock+16, 0, N8NVS_OUT_LEN);
+		TInt rr=f.Read(d);
+		f.Close();
+		if(rr==KErrNone && d.Length()==N8NVS_OUT_LEN){
+			Put32(gNvsBlock, KNvsMagic);
+			Put32(gNvsBlock+4, 1);
+			Put32(gNvsBlock+8, N8NVS_OUT_LEN);
+			Put32(gNvsBlock+12, n8nvs_crc32(gNvsBlock+16, N8NVS_OUT_LEN));
+			len=16+N8NVS_OUT_LEN;
+		}
+		Lf(_L8("wlan nvs: read %d bytes (%d)\n"), d.Length(), rr);
+	}
+	gFs.Delete(KNvsBin);
+	return len;
+}
+#endif
 
 // streams a file into the boot chunk at chunk offset aBase, returns size or <0
 static TInt Stream(RRunBlob& aDev, const TDesC& aName, TUint32 aBase, TUint8* aBuf){
@@ -364,7 +441,13 @@ GLDEF_C TInt E32Main(){
 	// in symbian's power code leaves the step it died in last
 	if(Has(_L("E:\\nowlan.txt"))){
 		L(_L8("wlan clock: skipped (nowlan.txt)\n"));
+		dev.NvsStore(KNullDesC8);
 	}else{
+		// the phone's own NVS for linux, first: wlanhwinit may switch the
+		// WLAN power itself, the clock steps below set the final state
+		TInt nvs=WlanNvs();
+		TInt rs=dev.NvsStore(TPtrC8(gNvsBlock, nvs));
+		Lf(_L8("wlan nvs: %d byte block for linux (%d)\n"), nvs, rs);
 		const TInt steps[3]={1, 2, 4};
 		const char* names[3]={"register", "clock 0x25 on", "genio100 high"};
 		TInt done=0;
