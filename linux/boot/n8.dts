@@ -41,7 +41,7 @@
 	 * reset we used to get anyway. e6.swd=0 (n8-noswd.dtb) turns it off.
 	 */
 	chosen {
-		bootargs = "earlycon=ramcon,0x1f000000 keep_bootcon console=tty0 panic=10 nohlt clk_ignore_unused pd_ignore_unused cma=0 rootfstype=ramfs e6.usbsh e6.nogui videocore.debug=1 videocore.loader_b=1 videocore.dma=1 videocore.rgb565=1 videocore.panel=n8 wlcore.irq_poll_ms=10 e6.swd=1 e6.lowmem=1";
+		bootargs = "earlycon=ramcon,0x1f000000 keep_bootcon console=tty0 panic=10 nohlt clk_ignore_unused pd_ignore_unused cma=0 rootfstype=ramfs e6.usbsh e6.nogui videocore.debug=0 videocore.loader_b=1 videocore.dma=1 videocore.rgb565=1 videocore.panel=n8 wlcore.irq_poll_ms=10 e6.swd=1 e6.lowmem=1";
 	};
 	/* all keys go straight to gpios and switch to gnd (schematic p4).
 	 * polled, the gpio irq polarity is not known */
