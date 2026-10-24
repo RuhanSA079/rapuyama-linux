@@ -63,6 +63,7 @@ done
 	printf 'file /usr/bin/fbtouch %s 755 0 0\n' "$KOUT/rootfs-extra/fbtouch"
 	printf 'file /usr/bin/wspitest %s 755 0 0\n' "$KOUT/rootfs-extra/wspitest"
 	printf 'file /usr/bin/swddump %s 755 0 0\n' "$HERE/../initramfs/swddump.sh"
+	printf 'file /usr/bin/spitest %s 755 0 0\n' "$HERE/../initramfs/spitest.sh"
 	printf 'file /usr/bin/khrntest %s 755 0 0\n' "$KOUT/vc-khrn/khrntest"
 	printf 'file /usr/bin/vctri %s 755 0 0\n' "$KOUT/vc-khrn/vctri"
 	printf 'file /usr/lib/libvcgl.so %s 755 0 0\n' "$KOUT/vc-khrn/libvcgl.so"

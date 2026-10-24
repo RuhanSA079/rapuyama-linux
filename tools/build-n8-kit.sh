@@ -80,6 +80,7 @@ done
 	printf 'file /usr/bin/fbtouch %s 755 0 0\n' "$KOUT/rootfs-extra/fbtouch"
 	printf 'file /usr/bin/wspitest %s 755 0 0\n' "$KOUT/rootfs-extra/wspitest"
 	printf 'file /usr/bin/swddump %s 755 0 0\n' "$ROOT/linux/initramfs/swddump.sh"
+	printf 'file /usr/bin/spitest %s 755 0 0\n' "$ROOT/linux/initramfs/spitest.sh"
 } >> "$KOUT/initramfs.list"
 
 echo ">> kernel"
