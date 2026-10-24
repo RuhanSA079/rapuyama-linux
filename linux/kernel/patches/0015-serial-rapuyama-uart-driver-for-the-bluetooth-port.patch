@@ -1,8 +1,8 @@
 ---
  drivers/tty/serial/Kconfig         |  10 +
  drivers/tty/serial/Makefile        |   1 +
- drivers/tty/serial/rapuyama_uart.c | 556 ++++++++++
- 3 files changed, 567 insertions(+)
+ drivers/tty/serial/rapuyama_uart.c | 555 ++++++++++
+ 3 files changed, 566 insertions(+)
  create mode 100644 drivers/tty/serial/rapuyama_uart.c
 
 diff --git a/drivers/tty/serial/Kconfig b/drivers/tty/serial/Kconfig
@@ -40,10 +40,10 @@ index 6954aa468..766288a3a 100644
  # These Sparc drivers have to appear before others such as 8250
 diff --git a/drivers/tty/serial/rapuyama_uart.c b/drivers/tty/serial/rapuyama_uart.c
 new file mode 100644
-index 000000000..f4b62b3dd
+index 000000000..2ef18d6eb
 --- /dev/null
 +++ b/drivers/tty/serial/rapuyama_uart.c
-@@ -0,0 +1,628 @@
+@@ -0,0 +1,627 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Nokia RapuYama UART (N8/E6/E7/C7), the port the bluetooth chip hangs off
@@ -150,7 +150,7 @@ index 000000000..f4b62b3dd
 +
 +static uint clkrate;
 +module_param(clkrate, uint, 0644);
-+MODULE_PARM_DESC(clkrate, "value for +0x3c (24 bit); 0 = leave what the firmware left (the N8 boots with 0x7fffff)");
++MODULE_PARM_DESC(clkrate, "override +0x3c (24 bit); 0 = what Start writes, REF/2 truncated to 0x24f800");
 +
 +static bool enable_block = true;
 +module_param(enable_block, bool, 0644);
@@ -405,16 +405,15 @@ index 000000000..f4b62b3dd
 +		ry_wr(port, RY_UART_LOCK, 1);
 +		ry_wr(port, RY_UART_IRQ_MASK, irq_mask);
 +		/*
-+		 * Not the input clock in Hz: +0x3c is only 24 bits, so
-+		 * REF/2 (0x124f800) truncates to 0x24f800 and we would be
-+		 * replacing a sane value with garbage. Symbian leaves
-+		 * 0x7fffff here (= 2^23 - 1, the field maximum) and the
-+		 * early console only ever writes it for two odd baud rates,
-+		 * which does not fit a frequency either. Leave it alone
-+		 * unless someone asks; clkrate= writes a value.
++		 * Start writes asr(0x0249f000, 1) = 0x0124f800 here, which
++		 * the 24 bit field truncates to 0x24f800 - the firmware
++		 * truncates identically, so that is what a live BT session
++		 * runs with. The 0x7fffff the N8 boots with is just the reset
++		 * default, visible because Symbian never starts the block
++		 * before the handoff. What the register means is still
++		 * unknown; clkrate= overrides it.
 +		 */
-+		if (clkrate)
-+			ry_wr(port, RY_UART_CLKRATE, clkrate);
++		ry_wr(port, RY_UART_CLKRATE, clkrate ? clkrate : RY_UART_REF / 2);
 +		ry_wr(port, RY_UART_REG48, 0);
 +		ry_wr(port, RY_UART_ENABLE, RY_UART_TX_RX_ON);
 +		dev_info(port->dev, "enable %08x clkrate %u busy %u room %u\n",
