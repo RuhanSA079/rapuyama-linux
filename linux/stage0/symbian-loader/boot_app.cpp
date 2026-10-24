@@ -1,5 +1,6 @@
-// streams a linux zImage + dtb from E: into contiguous phys ram and hands off
-// to the kernel (one-way). needs E:\zImage and E:\e6.dtb on the phone
+// streams a linux zImage + dtb into contiguous phys ram and hands off to the
+// kernel (one-way). needs zImage and e6.dtb on E:, or on a memory card: with
+// both on the card and on E: it asks which one to boot from
 //
 // chunk layout: zImage @ +0x00008000 (TEXT_OFFSET), dtb @ +0x02000000.
 // The E6 kernel has fixed PHYS_OFFSET=0x10000000; the DTB describes the
@@ -10,22 +11,26 @@
 #include <e32std.h>
 #include <f32file.h>
 #include <e32hal.h>
+#include <e32svr.h>
+#include <u32hal.h>
 #include "runblob.h"
 
 _LIT(KLog, "E:\\boot.log");
 #ifdef RB_IMAGE_BOOT
 // e6bfix: the uncompressed kernel (build-vc/arch/arm/boot/Image), it runs in
 // place inside the chunk, see AllocBoot in runblob_ldd.cpp
-_LIT(KZImage, "E:\\Image");
+_LIT(KZImage, "Image");
 #else
-_LIT(KZImage, "E:\\zImage");
+_LIT(KZImage, "zImage");
 #endif
-// device tree file name on E: (RB_DEFS='-DRB_DTB="n8"' -> E:\n8.dtb), so other phones'
+// device tree file name (RB_DEFS='-DRB_DTB="n8"' -> n8.dtb), so other phones'
 // loaders (n8boot) read their own dtb instead of the e6 one
 #ifndef RB_DTB
 #define RB_DTB "e6"
 #endif
-_LIT(KDtb, "E:\\" RB_DTB ".dtb");
+_LIT(KDtb, "" RB_DTB ".dtb"); // _LIT needs a string literal first
+// E:\keepscreen.txt: leave symbian's display on at the handoff (see Blank)
+_LIT(KKeepScreen, "E:\\keepscreen.txt");
 
 const TUint32 KZOff=0x00008000; // TEXT_OFFSET
 #ifdef RB_IMAGE_BOOT
@@ -66,6 +71,55 @@ static void Fail(const TDesC& aWhat, TInt aErr){
 	TBuf<32> e;
 	e.Format(_L("error %d"), aErr);
 	Ask(aWhat, e, _L("OK"), KNullDesC);
+}
+
+// "X:\name"
+static TFileName OnDrive(TInt aDrive, const TDesC& aName){
+	TChar c;
+	RFs::DriveToChar(aDrive, c);
+	TFileName f;
+	f.Append(c);
+	f.Append(_L(":\\"));
+	f.Append(aName);
+	return f;
+}
+
+static TBool Has(const TDesC& aFile){
+	TEntry e;
+	return gFs.Entry(aFile, e)==KErrNone && !e.IsDir();
+}
+
+static TBool HasKernel(TInt aDrive){
+	return Has(OnDrive(aDrive, KZImage)) && Has(OnDrive(aDrive, KDtb));
+}
+
+// the drive with the kernel files: E: (the N8's internal 16 gb), or the first
+// memory card that has them (F: on the N8). asks when both have them
+static TInt PickDrive(){
+	TDriveList dl;
+	if(gFs.DriveList(dl)!=KErrNone){return EDriveE;}
+	TInt card=-1;
+	for(TInt d=EDriveF; d<EDriveZ; d++){
+		TDriveInfo di;
+		if(!dl[d] || gFs.Drive(di, d)!=KErrNone){continue;}
+		Lf(_L8("drive %c: att=%x media=%d\n"), 'A'+d, di.iDriveAtt, di.iType);
+		if(!(di.iDriveAtt&KDriveAttRemovable) || di.iType==EMediaNotPresent){continue;}
+		if(HasKernel(d)){card=d; break;}
+	}
+	if(card<0){return EDriveE;}
+	if(!HasKernel(EDriveE)){return card;}
+	TBuf<48> m;
+	m.Format(_L("memory card %c: or phone E:"), 'A'+card);
+	return (Ask(_L("boot linux from"), m, _L("Card"), _L("Phone"))==0) ? card : EDriveE;
+}
+
+// switches symbian's display off right before the handoff, so the screen goes
+// black instead of freezing on the symbian picture until linux starts the
+// panel. needs PowerMgmt (the app has all capabilities)
+static void Blank(){
+	if(Has(KKeepScreen)){L(_L8("keepscreen: display left on\n")); return;}
+	TInt r=UserSvr::HalFunction(EHalGroupDisplay, EDisplayHalSetState, (TAny*)EFalse, NULL);
+	Lf(_L8("display off=%d\n"), r);
 }
 
 // streams a file into the boot chunk at chunk offset aBase, returns size or <0
@@ -192,6 +246,10 @@ GLDEF_C TInt E32Main(){
 		}
 	}
 
+	TInt drive=PickDrive();
+	TFileName zimage=OnDrive(drive, KZImage), dtb=OnDrive(drive, KDtb);
+	Lf(_L8("boot drive %c:\n"), 'A'+drive);
+
 	User::FreeLogicalDevice(KRunBlobName);
 	TInt rLoad=User::LoadLogicalDevice(KRunBlobLdd);
 	Lf(_L8("LoadLogicalDevice=%d\n"), rLoad);
@@ -223,15 +281,15 @@ GLDEF_C TInt E32Main(){
 		}
 	}
 
-	TInt zsz=Stream(dev, KZImage, KZOff, buf);
+	TInt zsz=Stream(dev, zimage, KZOff, buf);
 	Lf(_L8("zImage stream=%d\n"), zsz);
-	TInt dsz=Stream(dev, KDtb, KDtbOff, buf);
+	TInt dsz=Stream(dev, dtb, KDtbOff, buf);
 	Lf(_L8("dtb stream=%d\n"), dsz);
 	User::Free(buf);
 
 	if(zsz<=0 || dsz<=0){
-		L(_L8("missing zImage/dtb on E: -- aborting\n"));
-		Fail((zsz<=0) ? KZImage() : KDtb(), (zsz<=0) ? zsz : dsz);
+		L(_L8("missing zImage/dtb -- aborting\n"));
+		Fail((zsz<=0) ? zimage : dtb, (zsz<=0) ? zsz : dsz);
 		dev.Close(); gLog.Close(); gFs.Close();
 		return KErrNotFound;
 	}
@@ -298,6 +356,7 @@ GLDEF_C TInt E32Main(){
 #endif
 	}
 #endif
+	Blank();
 	L(_L8("about-to-Boot (one-way)\n"));
 	gLog.Close(); gFs.Close();
 	dev.Boot(KZOff, KDtbOff, 0xFFFFFFFFu, 0); // never returns

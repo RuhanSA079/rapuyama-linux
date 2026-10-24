@@ -13,7 +13,7 @@ State on 23.10.2026, Symbian Anna 024.001, `n8boot` loader, E6 kernel with the N
 
 | Part | Hardware | Status | Notes |
 | --- | --- | --- | --- |
-| Boot from Symbian | `n8boot.sis` (e6bfix built for `E:\n8.dtb`) | ✅ works | Needs a 32 MB+ RAM block starting below `0x1a000000`; the N8 hands out 96 MB at `0x19a00000`, the end check at `0x1f000000` had to go |
+| Boot from Symbian | `n8boot.sis` (e6bfix built for `E:\n8.dtb`) | ✅ works | Needs a 32 MB+ RAM block starting below `0x1a000000`; the N8 hands out 96 MB at `0x19a00000`, the end check at `0x1f000000` had to go. Reads `Image` + `n8.dtb` from E: or the memory card (asks when both have them), blanks the Symbian display at the handoff (`E:\keepscreen.txt` skips that) |
 | CPU | ARM1176JZF-S r0p4, 677 BogoMIPS | ✅ works | |
 | RAM | 93 MB for Linux | ✅ works | `e6.lowmem` (the RAM below the kernel) not tried on the N8 |
 | Timers, interrupts | RapuYama intc + timers | ✅ works | |
