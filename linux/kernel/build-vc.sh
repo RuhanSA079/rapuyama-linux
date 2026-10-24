@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # kernel + dtb with the VideoCore display driver (CONFIG_SOC_RAPUYAMA_VIDEOCORE)
-# usage: KERN_BIN=/path/to/kern.bin ./build-vc.sh
+# usage: KERN_BIN=/path/to/kern.bin [WLAN=1] [DEVMEM_ALL=1] ./build-vc.sh
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -33,6 +33,13 @@ python3 "$HERE/../../tools/vc_extract.py" "$KERN_BIN" "$KOUT/vcfw"
 ROOTFS="$HERE/../../work/rootfs-alpine"
 "$HERE/../initramfs/alpine.sh" "$ROOTFS"
 
+WLAN_FW="${WLAN_FW:-$HERE/../../work/wlan/fw}"
+if [ "${WLAN:-}" = 1 ]; then
+	for f in wl127x-fw-5-sr.bin wl127x-fw-5-mr.bin wl127x-nvs.bin; do
+		[ -f "$WLAN_FW/$f" ] || { echo "WLAN=1: missing $WLAN_FW/$f (linux-firmware ti-connectivity + tools/wl1271_nvs_convert.py)"; exit 1; }
+	done
+fi
+
 # the checked-in list has absolute paths from the author's machine: point
 # them at this checkout. the asm /sbin/init goes in a subdir, KOUT/init would
 # clash with the kernel's init/ objects
@@ -45,7 +52,7 @@ sed -E -e "s#^(file /bin/busybox ).*( 755 0 0)#\1$(realpath "$HERE/../../work/dl
 	"$HERE/../initramfs/initramfs.list" > "$KOUT/initramfs.list"
 
 # input / sensor test tools (linux/initramfs/{keytest,touchtest}.c, sensortest.sh)
-for t in keytest touchtest physdump fbtouch; do
+for t in keytest touchtest physdump fbtouch wspitest; do
 	arm-linux-gnu-gcc -march=armv6k -marm -static -nostdlib -fno-pie -no-pie \
 		-ffreestanding -fno-builtin -fomit-frame-pointer -fno-stack-protector \
 		-Os -Wall -Wextra -Werror \
@@ -61,7 +68,9 @@ done
 	printf 'file /usr/bin/sensortest %s 755 0 0\n' "$HERE/../initramfs/sensortest.sh"
 	printf 'file /usr/bin/physdump %s 755 0 0\n' "$KOUT/rootfs-extra/physdump"
 	printf 'file /usr/bin/fbtouch %s 755 0 0\n' "$KOUT/rootfs-extra/fbtouch"
+	printf 'file /usr/bin/wspitest %s 755 0 0\n' "$KOUT/rootfs-extra/wspitest"
 	printf 'file /usr/bin/swddump %s 755 0 0\n' "$HERE/../initramfs/swddump.sh"
+	printf 'file /usr/bin/spitest %s 755 0 0\n' "$HERE/../initramfs/spitest.sh"
 	printf 'file /usr/bin/khrntest %s 755 0 0\n' "$KOUT/vc-khrn/khrntest"
 	printf 'file /usr/bin/vctri %s 755 0 0\n' "$KOUT/vc-khrn/vctri"
 	printf 'file /usr/lib/libvcgl.so %s 755 0 0\n' "$KOUT/vc-khrn/libvcgl.so"
@@ -75,6 +84,15 @@ done
 	printf 'file /usr/bin/fps %s 755 0 0\n' "$HERE/../initramfs/fps.sh"
 	printf 'file /etc/e6-check.sh %s 755 0 0\n' "$HERE/../initramfs/e6-check.sh"
 	printf 'file /etc/fonts/local.conf %s 644 0 0\n' "$HERE/../initramfs/fonts-local.conf"
+	printf 'file /usr/bin/wlantest %s 755 0 0\n' "$HERE/../initramfs/wlantest.sh"
+	# WLAN=1: n8 WLAN firmware + NVS (MAC, calibration) from WLAN_FW, default
+	# work/wlan/fw (not in git: the NVS is per phone, see docs/n8-hardware.md)
+	if [ "${WLAN:-}" = 1 ]; then
+		printf 'dir /lib/firmware/ti-connectivity 755 0 0\n'
+		for f in wl127x-fw-5-sr.bin wl127x-fw-5-mr.bin wl127x-nvs.bin; do
+			printf 'file /lib/firmware/ti-connectivity/%s %s 644 0 0\n' "$f" "$WLAN_FW/$f"
+		done
+	fi
 	for f in vc-loader-a vc-loader-b vc-main; do
 		printf 'file /lib/firmware/vc/%s.bin %s 644 0 0\n' "$f" "$KOUT/vcfw/$f.bin"
 		printf 'file /lib/firmware/vc/%s.trl %s 644 0 0\n' "$f" "$KOUT/vcfw/$f.trl"
@@ -97,7 +115,13 @@ done
 	--enable IIO --enable IIO_BUFFER --enable IIO_TRIGGERED_BUFFER \
 	--enable IIO_ST_ACCEL_3AXIS --enable IIO_ST_ACCEL_I2C_3AXIS \
 	--enable AK8974 --enable SENSORS_TSL2563 \
-	--enable RMI4_CORE --enable RMI4_I2C --enable RMI4_2D_SENSOR --enable RMI4_F11
+	--enable RMI4_CORE --enable RMI4_I2C --enable RMI4_2D_SENSOR --enable RMI4_F11 \
+	--enable NEW_LEDS --enable LEDS_CLASS --enable LEDS_CLASS_MULTICOLOR \
+	--enable LEDS_LP55XX_COMMON --enable LEDS_LP5521 \
+	--enable SPI --enable SPI_RAPUYAMA --enable SPI_SPIDEV
+# WLAN=1: the n8's TI WL1271 (wlcore over spi-rapuyama)
+[ "${WLAN:-}" = 1 ] && "$KSRC/scripts/config" --file "$KOUT/.config" \
+	--enable WLAN_VENDOR_TI --enable WLCORE --enable WLCORE_SPI --enable WL12XX
 # DEVMEM_ALL=1: /dev/mem for all of RAM (physdump / swddump, firmware dumps)
 [ "${DEVMEM_ALL:-}" = 1 ] && "$KSRC/scripts/config" --file "$KOUT/.config" --disable STRICT_DEVMEM
 # modem experiments off (drivers/misc/rapuyama_*), they made boots die

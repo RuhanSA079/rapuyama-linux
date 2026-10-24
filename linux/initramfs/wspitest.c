@@ -1,0 +1,342 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * wspitest <spidev> [hz]: reads the TI WL1271 chip id over WSPI through
+ * spidev, the same steps wlcore does before it loads any firmware
+ * (wl12xx_set_power_on + wl12xx_identify_chip):
+ *
+ *   1. reset: 8 bytes of 0xff                        (wl12xx_spi_reset)
+ *   2. WSPI init command with crc7, then 4 bytes of
+ *      0xff with the chip select inverted            (wl12xx_spi_init)
+ *   3. boot partition: 8 writes to 0x1ffc0..0x1ffdc  (wlcore_set_partition)
+ *   4. ELP wake: write 1 to 0x1fffc                  (wlcore_fw_wakeup)
+ *   5. read 4 bytes at 0x1a634 = REG_CHIP_ID_B       (wl12xx 0x305674
+ *      through the boot partition)                    expect 0x04030111
+ *
+ * Writes only go to the chip's own partition / sleep registers, nothing is
+ * flashed or calibrated. The enable line (genio100) must already be high and
+ * the 19.2 MHz reference clock running (WLAN on in Symbian before the jump).
+ *
+ * WSPI words are 32 bit, MSB first on the wire. This tool uses 8 bit spidev
+ * transfers and builds the byte order itself, so the controller's 32 bit
+ * handling is not involved. The RapuYama controller is half duplex (like
+ * wlcore's own traffic): writes are tx-only transfers, the chip id read is
+ * a tx transfer (command) followed by an rx transfer under one chip
+ * select. Prints every byte it gets back.
+ *
+ * Build: arm-linux-gnu-gcc -march=armv6k -marm -static -nostdlib -O2 \
+ *          -I linux/initramfs -o wspitest work/spi-n8/wspitest.c
+ */
+#include "evtool.h"
+
+#define SYS_nanosleep 162
+#define O_RDWR 2
+
+/* spidev UAPI, 32-bit ARM */
+struct spi_ioc_transfer {
+	u32 tx_buf, tx_buf_hi;
+	u32 rx_buf, rx_buf_hi;
+	u32 len;
+	u32 speed_hz;
+	u16 delay_usecs;
+	u8 bits_per_word;
+	u8 cs_change;
+	u8 tx_nbits;
+	u8 rx_nbits;
+	u8 word_delay_usecs;
+	u8 pad;
+};
+
+#define SPI_IOC_MESSAGE_1 0x40206b00u	/* _IOW('k', 0, char[32]) */
+#define SPI_IOC_MESSAGE_2 0x40406b00u	/* _IOW('k', 0, char[64]) */
+#define SPI_IOC_WR_MODE 0x40016b01u
+#define SPI_IOC_WR_BITS 0x40016b03u
+#define SPI_IOC_WR_SPEED 0x40046b04u
+#define SPI_CS_HIGH 0x04
+
+#define WSPI_READ 0x40000000u
+#define WSPI_LEN(n) (((u32)(n) << 17) & 0x1ffe0000u)
+#define WSPI_ADDR(a) ((u32)(a) & 0x1ffffu)
+
+#define CHIP_ID_ADDR 0x1a634u	/* 0x14fc0 + 0x5674 */
+
+static s32 fd;
+static u32 hz = 1000000;
+static u8 txb[64], rxb[64];
+
+static void fail(const char *msg)
+{
+	puts_(msg);
+	flush();
+	exit_with_status(1);
+}
+
+static void puthex(u32 v, int digits)
+{
+	while (digits--)
+		putc_("0123456789abcdef"[(v >> (digits * 4)) & 0xf]);
+}
+
+static u32 parse(const char *s)
+{
+	u32 v = 0;
+
+	for (; *s >= '0' && *s <= '9'; s++)
+		v = v * 10 + (u32)(*s - '0');
+	return v;
+}
+
+static void msleep(u32 ms)
+{
+	u32 ts[2] = { ms / 1000, (ms % 1000) * 1000000 };
+
+	syscall3(SYS_nanosleep, (u32)ts, 0, 0);
+}
+
+static void set_mode(u8 mode)
+{
+	if ((s32)syscall3(SYS_ioctl, fd, SPI_IOC_WR_MODE, (u32)&mode) < 0)
+		fail("wspitest: can't set the spi mode\n");
+}
+
+/*
+ * one chip select assertion: txlen bytes out of txb, then (if rxlen) rxlen
+ * bytes into rxb
+ */
+static void xfer(const char *what, u32 txlen, u32 rxlen)
+{
+	struct spi_ioc_transfer t[2] = { { 0 }, { 0 } };
+	u32 i, len = rxlen;
+	s32 r;
+
+	t[0].tx_buf = (u32)txb;
+	t[0].len = txlen;
+	t[0].speed_hz = hz;
+	t[0].bits_per_word = 8;
+	t[1].rx_buf = (u32)rxb;
+	t[1].len = rxlen;
+	t[1].speed_hz = hz;
+	t[1].bits_per_word = 8;
+	memset(rxb, 0, sizeof(rxb));
+	r = (s32)syscall3(SYS_ioctl, fd,
+			  rxlen ? SPI_IOC_MESSAGE_2 : SPI_IOC_MESSAGE_1, (u32)t);
+	puts_(what);
+	if (r < 0) {
+		puts_(": ioctl failed ");
+		putd(r);
+		putc_('\n');
+		exit_with_status(1);
+	}
+	puts_(" rx:");
+	for (i = 0; i < len; i++) {
+		putc_(' ');
+		puthex(rxb[i], 2);
+	}
+	putc_('\n');
+}
+
+static void put_be32(u8 *p, u32 v)
+{
+	p[0] = (u8)(v >> 24);
+	p[1] = (u8)(v >> 16);
+	p[2] = (u8)(v >> 8);
+	p[3] = (u8)v;
+}
+
+static u32 get_be32(const u8 *p)
+{
+	return (u32)p[0] << 24 | (u32)p[1] << 16 | (u32)p[2] << 8 | p[3];
+}
+
+/* the kernel's crc7_be: crc in bits 7..1 */
+static u8 crc7_be(const u8 *p, u32 len)
+{
+	u8 crc = 0;
+	int b;
+
+	while (len--) {
+		crc ^= *p++;
+		for (b = 0; b < 8; b++)
+			crc = crc & 0x80 ? (u8)(crc << 1) ^ 0x12 : (u8)(crc << 1);
+	}
+	return crc;
+}
+
+static void write32(u32 addr, u32 val)
+{
+	put_be32(txb, WSPI_LEN(4) | WSPI_ADDR(addr));
+	put_be32(txb + 4, val);
+	xfer("  write", 8, 0);
+}
+
+/*
+ * one 32 bit read: command, then up to 7 busy / data words. returns the
+ * offset of the ready busy word in rxb or -1, the word in *val
+ */
+static int read32(const char *what, u32 addr, u32 *val)
+{
+	u32 i;
+
+	memset(txb, 0, sizeof(txb));
+	put_be32(txb, WSPI_READ | WSPI_LEN(4) | WSPI_ADDR(addr));
+	xfer(what, 4, 28);
+	for (i = 0; i + 8 <= 28; i += 4) {
+		if (rxb[i + 3] & 1) {	/* busy word bit 0 = ready */
+			*val = get_be32(rxb + i + 4);
+			return (int)i;
+		}
+	}
+	return -1;
+}
+
+/*
+ * wl12xx_top_reg_read: the "top" registers (fuses, clocks) sit behind the
+ * chip's OCP bridge: address >> 1 + 0x30000 to OCP_POR_CTR (0x9b4), 2 (read) to
+ * OCP_CMD (0x9c0), poll OCP_DATA_READ (0x9bc) for bit 18 (ready), bits 17:16 = status
+ * (1 = ok). In the boot partition register 0x300000 + x is at 0x14fc0 + x.
+ * wlcore fails here on the N8 ("Top register access timed out")
+ */
+static void top_read(u32 reg)
+{
+	u32 i, v = 0;
+
+	write32(0x14fc0 + 0x9b4, (reg >> 1) + 0x30000);
+	write32(0x14fc0 + 0x9c0, 2);	/* OCP_CMD: read (0x9b8 is OCP_POR_WDATA) */
+	for (i = 0; i < 32; i++) {
+		if (read32("ocp data", 0x14fc0 + 0x9bc, &v) < 0) {
+			puts_("  ocp data read: no ready busy word\n");
+			continue;
+		}
+		if (v & (1u << 18))
+			break;
+	}
+	puts_("top reg ");
+	puthex(reg, 4);
+	puts_(": ocp data ");
+	puthex(v, 8);
+	puts_(i < 32 ? ((v >> 16 & 3) == 1 ? " ready, ok\n" : " ready, error status\n") :
+	       " never ready (wlcore's timeout)\n");
+}
+
+/* a register (0x300000 + off) through the boot partition, printed */
+static u32 reg_read(const char *name, u32 off)
+{
+	u32 v = 0;
+
+	if (read32(name, 0x14fc0 + off, &v) < 0) {
+		puts_(name);
+		puts_(": no ready busy word\n");
+		return 0;
+	}
+	puts_(name);
+	puts_(" = ");
+	puthex(v, 8);
+	puts_("\n");
+	return v;
+}
+
+/*
+ * TI's own init before any top register access (the Symbian driver,
+ * symbian/oss.FCL.sf.adapt.TIWLANWL1271 TWD/FW_Transfer/HwInit.c
+ * hwInit_BootSm stages 0-1): reference clock 19.2 MHz into PLL_PARAMETERS
+ * (TI reads it back, 0xffffffff = chip not alive), the wake up counter
+ * pause to the highest threshold, arm the ELP wake up, 500 us
+ */
+static void ti_init(void)
+{
+	u32 v;
+
+	reg_read("PLL_PARAMETERS (power up)", 0x6040);
+	write32(0x14fc0 + 0x6040, 3);	/* PLL_PARAMETERS: 19.2 / 38.4 MHz */
+	v = reg_read("PLL_PARAMETERS", 0x6040);
+	if (v == 0xffffffffu)
+		puts_("  0xffffffff: TI's driver gives up here (chip not alive)\n");
+	v = reg_read("WU_COUNTER_PAUSE", 0x6008);
+	write32(0x14fc0 + 0x6008, (v & ~0x3ffu) | 0x3ff);
+	write32(0x14fc0 + 0x6100, 4);	/* WELP_ARM_COMMAND */
+	msleep(1);
+	reg_read("SCR_PAD2", 0x5610);
+	reg_read("ELP_WAKE_UP_STS", 0x5850);
+}
+
+void __attribute__((naked)) _start(void)
+{
+	__asm__ volatile("mov r0, sp\n\tb main_args");
+}
+
+void main_args(u32 *sp)
+{
+	static const u32 part[8][2] = {
+		{ 0x1ffc4, 0x00040000 }, { 0x1ffc0, 0x00014fc0 },
+		{ 0x1ffcc, 0x00300000 }, { 0x1ffc8, 0x00008800 },
+		{ 0x1ffd4, 0 }, { 0x1ffd0, 0 }, { 0x1ffdc, 0 }, { 0x1ffd8, 0 },
+	};
+	char **argv = (char **)(sp + 1);
+	u8 bits = 8;
+	u32 i, id = 0;
+	int found = -1;
+
+	default_signals();
+	if (sp[0] < 2)
+		fail("usage: wspitest /dev/spidevB.C [hz]\n");
+	if (sp[0] > 2)
+		hz = parse(argv[2]);
+	fd = (s32)syscall3(SYS_open, (u32)argv[1], O_RDWR, 0);
+	if (fd < 0)
+		fail("wspitest: can't open the spidev node\n");
+	set_mode(0);
+	if ((s32)syscall3(SYS_ioctl, fd, SPI_IOC_WR_BITS, (u32)&bits) < 0 ||
+	    (s32)syscall3(SYS_ioctl, fd, SPI_IOC_WR_SPEED, (u32)&hz) < 0)
+		fail("wspitest: can't set bits / speed\n");
+	puts_("wspitest at ");
+	putd((s32)hz);
+	puts_(" Hz\n");
+
+	/* 1. reset */
+	memset(txb, 0xff, 8);
+	xfer("reset", 8, 0);
+
+	/* 2. init: ff ff 40 00 00 00 79 crc|1 (fixed busy off, 0 busy words) */
+	txb[0] = 0xff;
+	txb[1] = 0xff;
+	txb[2] = 0x40;
+	txb[3] = 0;
+	txb[4] = 0;
+	txb[5] = 0;
+	txb[6] = 0x40 | 0x20 | 0x10 | 0x08 | 0x01;
+	txb[7] = crc7_be(txb + 2, 5) | 1;
+	xfer("init", 8, 0);
+	set_mode(SPI_CS_HIGH);
+	memset(txb, 0xff, 4);
+	xfer("extra clocks, cs high", 4, 0);
+	set_mode(0);
+
+	/* 3. + 4. */
+	for (i = 0; i < 8; i++)
+		write32(part[i][0], part[i][1]);
+	write32(0x1fffc, 1);
+	msleep(10);
+
+	/* 5. command, then up to 7 busy / data words */
+	found = read32("read chip id", CHIP_ID_ADDR, &id);
+	if (found < 0) {
+		puts_("no ready busy word: chip not answering (clock, enable, cs?)\n");
+		exit_with_status(2);
+	}
+	puts_("chip id ");
+	puthex(id, 8);
+	if (id == 0x04030111)
+		puts_(" = wl1271 PG20, OK\n");
+	else if (id == 0x04030101)
+		puts_(" = wl1271 PG10\n");
+	else
+		puts_(" (expected 04030111)\n");
+	/* 6. what wlcore reads next: the PG version fuse, then the spare reg */
+	top_read(0x050a);	/* WL127X_REG_FUSE_DATA_2_1 */
+	top_read(0x2320);	/* WL_SPARE_REG */
+	/* 7. TI's chip init first, then the same top registers again */
+	puts_("-- TI init (hwInit_BootSm 0-1), then again\n");
+	ti_init();
+	top_read(0x050a);
+	top_read(0x2320);
+	exit_with_status(id == 0x04030111 || id == 0x04030101 ? 0 : 3);
+}

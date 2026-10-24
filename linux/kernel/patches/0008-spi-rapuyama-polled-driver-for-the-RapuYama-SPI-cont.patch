@@ -1,0 +1,598 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Ruhan van der Berg <35257374+RuhanSA079@users.noreply.github.com>
+Date: Sat, 24 Oct 2026 11:29:55 +0200
+Subject: [PATCH] spi: rapuyama: polled driver for the RapuYama SPI controller
+
+The RapuYama has three identical SPI controllers (0x20020400, 0x20020600,
+0x20020a00, spi1/2/3.dll in the firmware) plus a block shared by them at
+0x20020800. On the N8 the TI WL1271 WLAN chip sits on the second one.
+
+Reversed from spi1/2/3.dll of the N8 RM-596 firmware: frame size and
+padding, clock divider (sclk = 192 MHz / 2 / (div + 1)), clock polarity
+and edge, fifo levels and thresholds, the settings handshake, the soft
+reset and the per chip select release bits. Clocks are PowerResourceManager
+resource 0x1c (cgc gate 0x0c) and resource 0x0b, which is a plain enable
+bit in the shared block. The firmware does not touch the pin mux.
+
+The driver is polled and half duplex like the firmware's polled engine,
+which the WLAN uses: a write phase (TX FIFO writes, wait for room, wait
+until idle) and a read phase in which every RXDATA read starts the next
+frame (one dummy read starts the first, ENABLE = 2 keeps the last read
+from starting another). 32 bit words are sent as two 16 bit frames, high
+half first, which is what wlcore's WSPI expects. The divider is 10 bits.
+Nothing is touched before probe, the shared clock enable is left on.
+Probe also does the firmware's initial sync and its writes of the
+controller bit to the shared block (0x810/0x82c/0x834).
+
+For the bring-up the FIFO access width (io32, default 16 bit like the
+firmware), the RXEN value (rxen, default 0) and a register dump around
+the first frames (debug=N) are module parameters.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/spi/Kconfig        |  11 +
+ drivers/spi/Makefile       |   1 +
+ drivers/spi/spi-rapuyama.c | 520 +++++++++++++++++++++++++++++++++++++
+ 3 files changed, 532 insertions(+)
+ create mode 100644 drivers/spi/spi-rapuyama.c
+
+diff --git a/drivers/spi/Kconfig b/drivers/spi/Kconfig
+index 823797217..3e23826cd 100644
+--- a/drivers/spi/Kconfig
++++ b/drivers/spi/Kconfig
+@@ -867,6 +867,17 @@ config SPI_ROCKCHIP_SFC
+ 	  ROCKCHIP SFC supports DMA and PIO modes. When DMA is not available,
+ 	  the driver automatically falls back to PIO mode.
+ 
++config SPI_RAPUYAMA
++	tristate "Nokia RapuYama SPI controller"
++	depends on ARCH_RAPUYAMA || COMPILE_TEST
++	help
++	  Polled driver for the three SPI controllers of the Nokia RapuYama
++	  application ASIC (N8, E6, E7, C7). On the N8 the TI WL1271 WLAN
++	  chip sits on the second one. The interrupts and the DMA hooks of
++	  the controller are not used.
++
++	  If unsure, say N.
++
+ config SPI_RB4XX
+ 	tristate "Mikrotik RB4XX SPI master"
+ 	depends on SPI_MASTER && ATH79
+diff --git a/drivers/spi/Makefile b/drivers/spi/Makefile
+index a9b1bc259..5bb1c6d66 100644
+--- a/drivers/spi/Makefile
++++ b/drivers/spi/Makefile
+@@ -117,6 +117,7 @@ obj-$(CONFIG_SPI_QCOM_QSPI)		+= spi-qcom-qspi.o
+ obj-$(CONFIG_SPI_QUP)			+= spi-qup.o
+ obj-$(CONFIG_SPI_ROCKCHIP)		+= spi-rockchip.o
+ obj-$(CONFIG_SPI_ROCKCHIP_SFC)		+= spi-rockchip-sfc.o
++obj-$(CONFIG_SPI_RAPUYAMA)		+= spi-rapuyama.o
+ obj-$(CONFIG_SPI_RB4XX)			+= spi-rb4xx.o
+ obj-$(CONFIG_MACH_REALTEK_RTL)		+= spi-realtek-rtl.o
+ obj-$(CONFIG_SPI_RPCIF)			+= spi-rpc-if.o
+diff --git a/drivers/spi/spi-rapuyama.c b/drivers/spi/spi-rapuyama.c
+new file mode 100644
+index 000000000..fec9c08ec
+--- /dev/null
++++ b/drivers/spi/spi-rapuyama.c
+@@ -0,0 +1,520 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Nokia RapuYama SPI controller (N8/E6/E7/C7 application ASIC)
++ *
++ * No public documentation exists, reversed from spi1/2/3.dll of the N8
++ * RM-596 firmware (three identical blocks at 0x20020400 / 0x20020600 /
++ * 0x20020a00, the WLAN uses spi2.dll = 0x20020600). Notes with the evidence:
++ * work/spi-n8/NOTES.md in the rapuyama-linux tree.
++ *
++ * The data path is 16 bits wide: a frame is (FRAME + 1) halfwords with PAD
++ * unused bits, data sits in the low bits of the FIFO halfword. This driver
++ * only uses 8 and 16 bit frames and sends a 32 bit word as two 16 bit frames,
++ * high half first, so the halfword order of wider hardware frames (unknown)
++ * never matters. The chip select is a per-CS bit in CS_REL (set = released),
++ * the firmware clears it when a request starts and sets it when the request
++ * is done; the controller itself only clocks while there is data.
++ *
++ * Polled and half duplex, like the firmware's polled engine that the WLAN
++ * uses: a write phase (TX FIFO writes, wait for room, wait until idle) and a
++ * read phase in which reading RXDATA starts the next frame (one dummy read
++ * starts the first, ENABLE = 2 keeps the last read from starting another).
++ * v1/v2 waited for RX data after TX writes, which never comes. The FIFO
++ * access width (io32) and the RXEN value (rxen) stay module parameters,
++ * debug=N dumps every register around the first N frames. The three irq
++ * lines (spi2: 191..193, one acked through 0x20020820) and the dma hooks are
++ * not used.
++ *
++ * Clocks: PowerResourceManager resource 0x1c (cgc gate 0x0c, 0x200330d0 bit
++ * 8, "ick" here) and resource 0x0b, which power_resources.dll implements as
++ * the plain write of 1 / 0 to 0x20020804 (the shared block, second reg).
++ * The firmware never turns the shared one off while another controller runs,
++ * this driver never turns it off at all. Pin mux: none, nothing in the
++ * firmware sets the mux of the SPI pins, they stay as the boot code left them.
++ */
++
++#include <linux/bits.h>
++#include <linux/clk.h>
++#include <linux/delay.h>
++#include <linux/io.h>
++#include <linux/iopoll.h>
++#include <linux/ktime.h>
++#include <linux/math.h>
++#include <linux/module.h>
++#include <linux/mod_devicetable.h>
++#include <linux/mutex.h>
++#include <linux/platform_device.h>
++#include <linux/spi/spi.h>
++
++#define RY_SPI_ENABLE	0x04	/* 1 = on, 0 = off (spi dll power on / off) */
++#define RY_SPI_PAD	0x08	/* unused bits in the last halfword of a frame */
++#define RY_SPI_FRAME	0x0c	/* halfwords per frame - 1 */
++#define RY_SPI_CPOL	0x10	/* clock idles high */
++#define RY_SPI_EDGE	0x14	/* 1 for spi modes 0 and 3 (inferred) */
++#define RY_SPI_TXEN	0x18	/* 0 only for receive only requests */
++#define RY_SPI_DIV_A	0x1c	/* sclk = fck / 2 / (div + 1), both written */
++#define RY_SPI_DIV_B	0x20
++#define RY_SPI_BUSY	0x28	/* non-zero while shifting */
++#define RY_SPI_TXDATA	0x2c	/* data in bits 15:0, firmware uses strh */
++#define RY_SPI_TXFREE	0x30	/* tx fifo room, 3 when idle */
++#define RY_SPI_TXTHR	0x34	/* frame halfwords - 1 */
++#define RY_SPI_RXDATA	0x38	/* data in bits 15:0, firmware uses ldrh */
++#define RY_SPI_RXLVL	0x3c	/* rx fifo halfwords */
++#define RY_SPI_RXTHR	0x40	/* frame halfwords - 1 */
++#define RY_SPI_RXEN	0x44	/* 7 for streaming reads, 0 otherwise */
++#define RY_SPI_CFG48	0x48	/* 1 in every firmware configuration */
++#define RY_SPI_CS_REL	0x4c	/* bit n set = chip select n released */
++#define RY_SPI_CFG58	0x58	/* 1 in every firmware configuration */
++#define RY_SPI_SYNC	0x5c	/* write 0, reads non-zero once applied */
++#define RY_SPI_RESET	0x60	/* 0 = held in reset, 1 = running */
++#define RY_SPI_BUSY2	0x6c	/* non-zero while the tx side is busy */
++
++#define RY_SPI_REG_LAST	0x70
++
++/* bit of each controller in the shared block (spi1/2/3.dll init) */
++static const struct {
++	u16 off;
++	u16 bit;
++} ry_spi_shared_bits[] = {
++	{ 0x400, BIT(6) }, { 0x600, BIT(8) }, { 0xa00, BIT(10) },
++};
++
++static bool io32;
++module_param(io32, bool, 0644);
++MODULE_PARM_DESC(io32, "32 bit FIFO accesses, default 16 bit like the firmware");
++static uint rxen;
++module_param(rxen, uint, 0644);
++MODULE_PARM_DESC(rxen, "RXEN (+0x44) in the read phase: 0 (default) or 7 (streaming)");
++static uint debug;
++module_param(debug, uint, 0644);
++MODULE_PARM_DESC(debug, "dump all registers around this many frames per transfer");
++
++/* shared block, phys 0x20020800 */
++#define RY_SPI_SH_GATE	0x04	/* PowerResourceManager resource 0x0b */
++#define RY_SPI_SH_INIT0	0x10	/* the three the firmware's init writes */
++#define RY_SPI_SH_INIT1	0x2c	/* the controller bit to, likely irq */
++#define RY_SPI_SH_INIT2	0x34	/* routing / enables */
++
++#define RY_SPI_DIV_MIN	1	/* the firmware's fastest setting, 48 MHz */
++#define RY_SPI_DIV_MAX	0x3ff	/* 0xffff reads back as 0x3ff */
++#define RY_SPI_FCK	192000000UL
++#define RY_SPI_POLL_US	10000
++
++struct ry_spi {
++	void __iomem *base;
++	void __iomem *sh;
++	u32 sh_bit;
++	struct device *dev;
++	unsigned long fck;
++	/* shadow of what is programmed, the sync handshake is only done on a change */
++	u32 bits;
++	u32 div;
++	u32 mode;
++};
++
++static DEFINE_MUTEX(ry_spi_shared_lock);
++
++static inline u32 ry_rd(struct ry_spi *rs, u32 reg)
++{
++	return readl(rs->base + reg);
++}
++
++static inline void ry_wr(struct ry_spi *rs, u32 reg, u32 val)
++{
++	writel(val, rs->base + reg);
++}
++
++static int ry_spi_sync(struct ry_spi *rs)
++{
++	u32 v;
++	int ret;
++
++	ry_wr(rs, RY_SPI_SYNC, 0);
++	ret = readl_poll_timeout_atomic(rs->base + RY_SPI_SYNC, v, v, 1,
++					RY_SPI_POLL_US);
++	if (ret)
++		dev_err(rs->dev, "settings not taken (sync stuck at 0)\n");
++	return ret;
++}
++
++static u32 ry_spi_div(struct ry_spi *rs, u32 hz)
++{
++	u32 div = DIV_ROUND_UP(rs->fck / 2, hz) - 1;
++
++	return clamp_t(u32, div, RY_SPI_DIV_MIN, RY_SPI_DIV_MAX);
++}
++
++/* the firmware writes all of these, then the sync handshake (FUN_801116dc) */
++static int ry_spi_config(struct ry_spi *rs, u32 bits, u32 hz, u32 mode)
++{
++	u32 div = ry_spi_div(rs, hz);
++	bool cpol = mode & SPI_CPOL, cpha = mode & SPI_CPHA;
++
++	mode &= SPI_CPOL | SPI_CPHA;
++	if (bits == rs->bits && div == rs->div && mode == rs->mode)
++		return 0;
++
++	ry_wr(rs, RY_SPI_TXEN, 1);
++	/* one halfword per frame, bits <= 16 */
++	ry_wr(rs, RY_SPI_FRAME, 0);
++	ry_wr(rs, RY_SPI_PAD, 16 - bits);
++	ry_wr(rs, RY_SPI_RXTHR, 0);
++	ry_wr(rs, RY_SPI_TXTHR, 0);
++	ry_wr(rs, RY_SPI_DIV_A, div);
++	ry_wr(rs, RY_SPI_DIV_B, div);
++	ry_wr(rs, RY_SPI_CPOL, cpol);
++	ry_wr(rs, RY_SPI_EDGE, cpol == cpha);
++	ry_wr(rs, RY_SPI_CFG58, 1);
++	ry_wr(rs, RY_SPI_CFG48, 1);
++
++	rs->bits = 0;
++	if (ry_spi_sync(rs))
++		return -ETIMEDOUT;
++	rs->bits = bits;
++	rs->div = div;
++	rs->mode = mode;
++	return 0;
++}
++
++static void ry_spi_set_cs(struct spi_device *spi, bool high)
++{
++	struct ry_spi *rs = spi_controller_get_devdata(spi->controller);
++	u32 bit = BIT(spi_get_chipselect(spi, 0));
++	u32 v = ry_rd(rs, RY_SPI_CS_REL);
++
++	ry_wr(rs, RY_SPI_CS_REL, high ? v | bit : v & ~bit);
++}
++
++/*
++ * every register but the data ports (the firmware never reads TXDATA and
++ * reading it changed TXFREE on the phone; an RXDATA read starts a frame),
++ * then the shared ones
++ */
++static void ry_spi_regs(struct ry_spi *rs, const char *what)
++{
++	char buf[28 * 9 + 1];
++	int n = 0;
++	u32 r;
++
++	for (r = 0x04; r <= RY_SPI_REG_LAST; r += 4)
++		if (r != RY_SPI_RXDATA && r != RY_SPI_TXDATA)
++			n += scnprintf(buf + n, sizeof(buf) - n, " %x",
++				       ry_rd(rs, r));
++	dev_info(rs->dev, "%s: 04..70 (no 2c 38):%s sh 04 %x 08 %x 0c %x\n",
++		 what, buf, readl(rs->sh + RY_SPI_SH_GATE), readl(rs->sh + 0x08),
++		 readl(rs->sh + 0x0c));
++}
++
++static void ry_spi_dump(struct ry_spi *rs, const char *what)
++{
++	dev_err(rs->dev,
++		"%s timeout: busy %x/%x txfree %x rxlvl %x rxen %x cs %x\n",
++		what, ry_rd(rs, RY_SPI_BUSY), ry_rd(rs, RY_SPI_BUSY2),
++		ry_rd(rs, RY_SPI_TXFREE), ry_rd(rs, RY_SPI_RXLVL),
++		ry_rd(rs, RY_SPI_RXEN), ry_rd(rs, RY_SPI_CS_REL));
++	ry_spi_regs(rs, what);
++}
++
++static void ry_spi_txw(struct ry_spi *rs, u16 v)
++{
++	if (io32)
++		writel(v, rs->base + RY_SPI_TXDATA);
++	else
++		writew(v, rs->base + RY_SPI_TXDATA);
++}
++
++static u16 ry_spi_rxw(struct ry_spi *rs)
++{
++	if (io32)
++		return readl(rs->base + RY_SPI_RXDATA) & 0xffff;
++	return readw(rs->base + RY_SPI_RXDATA);
++}
++
++static u16 ry_spi_half(const u8 *buf, unsigned int step, unsigned int f)
++{
++	/* frame f of the buffer: bytes, halfwords or 32 bit words high half first */
++	if (step == 1)
++		return buf[f];
++	if (step == 2)
++		return ((const u16 *)buf)[f];
++	return f & 1 ? ((const u32 *)buf)[f / 2] & 0xffff :
++		       ((const u32 *)buf)[f / 2] >> 16;
++}
++
++static void ry_spi_put(u8 *buf, unsigned int step, unsigned int f, u16 v)
++{
++	if (step == 1)
++		buf[f] = v;
++	else if (step == 2)
++		((u16 *)buf)[f] = v;
++	else if (f & 1)
++		((u32 *)buf)[f / 2] = (((u32 *)buf)[f / 2] & 0xffff0000) | v;
++	else
++		((u32 *)buf)[f / 2] = (u32)v << 16;
++}
++
++/*
++ * Write phase, the firmware's polled write (FUN_80110c30): per frame wait
++ * for TX room, write; at the end wait until both busy flags are 0.
++ */
++static int ry_spi_tx(struct ry_spi *rs, const u8 *buf, unsigned int nf,
++		     unsigned int step)
++{
++	unsigned int f;
++	u32 v;
++
++	for (f = 0; f < nf; f++) {
++		if (readl_poll_timeout_atomic(rs->base + RY_SPI_TXFREE, v,
++					      v > ry_rd(rs, RY_SPI_TXTHR), 0,
++					      RY_SPI_POLL_US)) {
++			ry_spi_dump(rs, "tx");
++			return -ETIMEDOUT;
++		}
++		ry_spi_txw(rs, ry_spi_half(buf, step, f));
++		if (f < debug)
++			ry_spi_regs(rs, "after tx write");
++		if (!(f & 0x7ff))
++			cond_resched();
++	}
++	/* not fatal: BUSY2 was seen stuck at 1 on the phone */
++	if (readl_poll_timeout_atomic(rs->base + RY_SPI_BUSY, v,
++				      !v && !ry_rd(rs, RY_SPI_BUSY2), 0,
++				      RY_SPI_POLL_US)) {
++		dev_warn_once(rs->dev, "tx end: busy flags did not clear\n");
++		if (debug)
++			ry_spi_regs(rs, "tx end");
++	}
++	return 0;
++}
++
++/* wait for an rx frame; like the firmware, kick again when the bus idles */
++static int ry_spi_rx_wait(struct ry_spi *rs)
++{
++	unsigned int idle = 0, kicks = 0;
++	ktime_t end = ktime_add_us(ktime_get(), RY_SPI_POLL_US);
++
++	while (ry_rd(rs, RY_SPI_RXLVL) <= ry_rd(rs, RY_SPI_RXTHR)) {
++		if (ktime_after(ktime_get(), end)) {
++			ry_spi_dump(rs, "rx");
++			return -ETIMEDOUT;
++		}
++		if (ry_rd(rs, RY_SPI_BUSY)) {
++			idle = 0;
++			continue;
++		}
++		/* FUN_80110ccc: div * 5 idle polls, then a dummy RXDATA read */
++		if (++idle > 5 * (rs->div + 1) && kicks < 4) {
++			ry_spi_rxw(rs);
++			idle = 0;
++			kicks++;
++		}
++	}
++	return 0;
++}
++
++/*
++ * Read phase, the firmware's polled read (FUN_80110ccc): RXEN 0, one dummy
++ * RXDATA read starts the first frame, every RXDATA read starts the next one,
++ * so before the last frame is read ENABLE goes to 2 (no new frame) and back
++ * to 1 afterwards.
++ */
++static int ry_spi_rx(struct ry_spi *rs, u8 *buf, unsigned int nf,
++		     unsigned int step)
++{
++	unsigned int f;
++	int ret = 0;
++	u32 v;
++
++	ry_wr(rs, RY_SPI_RXEN, rxen);
++	ry_spi_rxw(rs);
++	if (debug)
++		ry_spi_regs(rs, "rx start");
++	for (f = 0; f < nf; f++) {
++		ret = ry_spi_rx_wait(rs);
++		if (ret)
++			break;
++		if (f == nf - 1) {
++			readl_poll_timeout_atomic(rs->base + RY_SPI_BUSY, v,
++						  !v, 0, RY_SPI_POLL_US);
++			ry_wr(rs, RY_SPI_ENABLE, 2);
++		}
++		ry_spi_put(buf, step, f, ry_spi_rxw(rs));
++		if (f < debug)
++			ry_spi_regs(rs, "after rx read");
++		if (!(f & 0x7ff))
++			cond_resched();
++	}
++	ry_wr(rs, RY_SPI_ENABLE, 1);
++	ry_wr(rs, RY_SPI_RXEN, 0);
++	return ret;
++}
++
++/* half duplex like the firmware: a transfer either writes or reads */
++static int ry_spi_transfer_one(struct spi_controller *ctlr,
++			       struct spi_device *spi,
++			       struct spi_transfer *xfer)
++{
++	struct ry_spi *rs = spi_controller_get_devdata(ctlr);
++	u32 bpw = xfer->bits_per_word;
++	unsigned int step = bpw == 8 ? 1 : bpw == 16 ? 2 : 4;
++	unsigned int nf = xfer->len / step * (step == 4 ? 2 : 1);
++	int ret;
++
++	ret = ry_spi_config(rs, bpw == 8 ? 8 : 16, xfer->speed_hz, spi->mode);
++	if (ret)
++		return ret;
++	xfer->effective_speed_hz = rs->fck / 2 / (rs->div + 1);
++	if (debug)
++		ry_spi_regs(rs, "transfer start");
++	if (xfer->tx_buf)
++		return ry_spi_tx(rs, xfer->tx_buf, nf, step);
++	if (xfer->rx_buf)
++		return ry_spi_rx(rs, xfer->rx_buf, nf, step);
++	return 0;
++}
++
++static int ry_spi_shared_on(struct device *dev, struct ry_spi *rs,
++			    phys_addr_t base)
++{
++	struct platform_device *pdev = to_platform_device(dev);
++	struct resource *res;
++	void __iomem *sh;
++	int i;
++
++	res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
++	if (!res)
++		return dev_err_probe(dev, -EINVAL, "no shared register\n");
++	/* shared by the three controllers, so not requested */
++	sh = devm_ioremap(dev, res->start, resource_size(res));
++	if (!sh)
++		return -ENOMEM;
++	rs->sh = sh;
++	for (i = 0; i < ARRAY_SIZE(ry_spi_shared_bits); i++)
++		if ((base & 0xfff) == ry_spi_shared_bits[i].off)
++			rs->sh_bit = ry_spi_shared_bits[i].bit;
++	mutex_lock(&ry_spi_shared_lock);
++	writel(1, sh + RY_SPI_SH_GATE);
++	mutex_unlock(&ry_spi_shared_lock);
++	return 0;
++}
++
++/* power off as the firmware does it (FUN_80110688), the shared gate stays on */
++static void ry_spi_off(void *data)
++{
++	struct ry_spi *rs = data;
++
++	ry_wr(rs, RY_SPI_RXEN, 0);
++	ry_wr(rs, RY_SPI_ENABLE, 0);
++}
++
++#ifdef CONFIG_ARCH_RAPUYAMA
++int rapuyama_safe_readl(const void __iomem *addr, u32 *val);
++#else
++static int rapuyama_safe_readl(const void __iomem *addr, u32 *val)
++{
++	*val = readl(addr);
++	return 0;
++}
++#endif
++
++static int ry_spi_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct spi_controller *ctlr;
++	struct resource *res;
++	struct ry_spi *rs;
++	struct clk *clk;
++	u32 v;
++	int ret;
++
++	ctlr = devm_spi_alloc_host(dev, sizeof(*rs));
++	if (!ctlr)
++		return -ENOMEM;
++	rs = spi_controller_get_devdata(ctlr);
++	rs->dev = dev;
++	rs->base = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
++	if (IS_ERR(rs->base))
++		return PTR_ERR(rs->base);
++
++	clk = devm_clk_get_enabled(dev, "ick");
++	if (IS_ERR(clk))
++		return dev_err_probe(dev, PTR_ERR(clk), "no interface clock\n");
++	clk = devm_clk_get_optional(dev, "fck");
++	if (IS_ERR(clk))
++		return dev_err_probe(dev, PTR_ERR(clk), "bad functional clock\n");
++	rs->fck = clk ? clk_get_rate(clk) : 0;
++	if (!rs->fck)
++		rs->fck = RY_SPI_FCK;
++
++	ret = ry_spi_shared_on(dev, rs, res->start);
++	if (ret)
++		return ret;
++	udelay(10);
++	ret = rapuyama_safe_readl(rs->base + RY_SPI_ENABLE, &v);
++	if (ret)
++		return dev_err_probe(dev, ret, "controller is not accessible\n");
++
++	/* power on (FUN_80110640), then the init of FUN_80110870 */
++	ry_wr(rs, RY_SPI_ENABLE, 1);
++	ret = devm_add_action_or_reset(dev, ry_spi_off, rs);
++	if (ret)
++		return ret;
++	ry_spi_regs(rs, "probe, before init");
++	ry_wr(rs, RY_SPI_RESET, 0);
++	ry_wr(rs, RY_SPI_RESET, 1);
++	ry_wr(rs, RY_SPI_RXEN, 0);
++	ret = ry_spi_sync(rs);
++	if (ret)
++		return ret;
++	ry_wr(rs, RY_SPI_CS_REL, ry_rd(rs, RY_SPI_CS_REL) | BIT(0));
++	ret = ry_spi_config(rs, 8, rs->fck / 2 / (RY_SPI_DIV_MAX + 1), 0);
++	if (ret)
++		return ret;
++	/*
++	 * last step of the firmware's init, before it binds the irqs (they
++	 * stay masked in the intc here)
++	 */
++	if (rs->sh_bit) {
++		writel(rs->sh_bit, rs->sh + RY_SPI_SH_INIT0);
++		writel(rs->sh_bit, rs->sh + RY_SPI_SH_INIT1);
++		writel(rs->sh_bit, rs->sh + RY_SPI_SH_INIT2);
++	}
++	ry_spi_regs(rs, "probe, after init");
++
++	ctlr->dev.of_node = dev->of_node;
++	ctlr->bus_num = -1;
++	ctlr->num_chipselect = 1;
++	ctlr->mode_bits = SPI_CPOL | SPI_CPHA | SPI_CS_HIGH;
++	ctlr->bits_per_word_mask = SPI_BPW_MASK(8) | SPI_BPW_MASK(16) |
++				   SPI_BPW_MASK(32);
++	ctlr->max_speed_hz = rs->fck / 2 / (RY_SPI_DIV_MIN + 1);
++	ctlr->min_speed_hz = DIV_ROUND_UP(rs->fck / 2, RY_SPI_DIV_MAX + 1);
++	ctlr->flags = SPI_CONTROLLER_HALF_DUPLEX;
++	ctlr->set_cs = ry_spi_set_cs;
++	ctlr->transfer_one = ry_spi_transfer_one;
++	ctlr->use_gpio_descriptors = true;
++
++	ret = devm_spi_register_controller(dev, ctlr);
++	if (ret)
++		return dev_err_probe(dev, ret, "can't register\n");
++	dev_info(dev, "polled, %lu..%lu Hz\n", (unsigned long)ctlr->min_speed_hz,
++		 (unsigned long)ctlr->max_speed_hz);
++	return 0;
++}
++
++static const struct of_device_id ry_spi_match[] = {
++	{ .compatible = "nokia,rapuyama-spi" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, ry_spi_match);
++
++static struct platform_driver ry_spi_driver = {
++	.probe = ry_spi_probe,
++	.driver = {
++		.name = "rapuyama-spi",
++		.of_match_table = ry_spi_match,
++	},
++};
++module_platform_driver(ry_spi_driver);
++MODULE_DESCRIPTION("Nokia RapuYama SPI controller");
++MODULE_LICENSE("GPL");

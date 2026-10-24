@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Ruhan van der Berg <35257374+RuhanSA079@users.noreply.github.com>
+Date: Sat, 24 Oct 2026 13:00:00 +0200
+Subject: [PATCH] wifi: wl12xx: bind the wl127x / wl128x devices of the SPI glue
+
+wlcore's SPI glue (wlcore/spi.c) creates the core platform device with
+the chip family name, "wl127x" or "wl128x" for the wl12xx chips, while
+the SDIO glue always uses "wl12xx". wl12xx only matches "wl12xx", so on
+SPI nothing binds: the glue probes ("selected chip family is wl127x")
+and then nothing happens, no wlan0 and no error. Seen on the Nokia N8
+(TI WL1271 PG2.0 on SPI).
+
+Match the two SPI names as well.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+  drivers/net/wireless/ti/wl12xx/main.c | 3 +++
+  1 file changed, 3 insertions(+)
+
+diff --git a/drivers/net/wireless/ti/wl12xx/main.c b/drivers/net/wireless/ti/wl12xx/main.c
+index b26d42b4e..fa6c3ff84 100644
+--- a/drivers/net/wireless/ti/wl12xx/main.c
++++ b/drivers/net/wireless/ti/wl12xx/main.c
+@@ -1933,6 +1933,9 @@ static void wl12xx_remove(struct platform_device *pdev)
+ 
+ static const struct platform_device_id wl12xx_id_table[] = {
+ 	{ "wl12xx", 0 },
++	/* the spi glue names the platform device after the chip family */
++	{ "wl127x", 0 },
++	{ "wl128x", 0 },
+ 	{  } /* Terminating Entry */
+ };
+ MODULE_DEVICE_TABLE(platform, wl12xx_id_table);
+-- 
+2.43.0
+

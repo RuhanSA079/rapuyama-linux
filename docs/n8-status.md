@@ -13,7 +13,7 @@ State on 23.10.2026, Symbian Anna 024.001, `n8boot` loader, E6 kernel with the N
 
 | Part | Hardware | Status | Notes |
 | --- | --- | --- | --- |
-| Boot from Symbian | `n8boot.sis` (e6bfix built for `E:\n8.dtb`) | ✅ works | Needs a 32 MB+ RAM block starting below `0x1a000000`; the N8 hands out 96 MB at `0x19a00000`, the end check at `0x1f000000` had to go |
+| Boot from Symbian | `n8boot.sis` (e6bfix built for `E:\n8.dtb`) | ✅ works | Needs a 32 MB+ RAM block starting below `0x1a000000`; the N8 hands out 96 MB at `0x19a00000`, the end check at `0x1f000000` had to go. Reads `Image` + `n8.dtb` from E: or the memory card (asks when both have them), blanks the Symbian display at the handoff (`E:\keepscreen.txt` skips that) |
 | CPU | ARM1176JZF-S r0p4, 677 BogoMIPS | ✅ works | |
 | RAM | 93 MB for Linux | ✅ works | `e6.lowmem` (the RAM below the kernel) not tried on the N8 |
 | Timers, interrupts | RapuYama intc + timers | ✅ works | |
@@ -23,7 +23,7 @@ State on 23.10.2026, Symbian Anna 024.001, `n8boot` loader, E6 kernel with the N
 | RAM log after a reset | `ramcon` at `0x1f000000`, `e6logs.sis` | ✅ works | Only after a reset: when the phone powers off, the RAM is lost |
 | `reboot` back to Symbian | soc reset `0x20033114` + startup mode in `0x20040400` bits 20-23 | 🧪 test | Symbian left the mode at 0, then the reset powers the N8 off. Setting it to `0xe` first (as `rebootdriver.ldd` does) brought Symbian back (devmem test). Now done by the restart handler with the 4th watchdog reg in the N8 dtbs |
 | Internal eMMC (`E:`, 16 GB) | `mmcblk1`, Samsung MAG4EM | ✅ reads | Stuck in 1-bit mode (`switch to bus width 4 failed`). One FAT32 filesystem, no partition table. **Never write to it** |
-| microSD | 2nd MMC controller, through the GAZOO level shifter | 🧪 test | No `mmcblk0` seen, probably no card inserted |
+| microSD | 2nd MMC controller `0x20032800`, through the GAZOO level shifter | ✅ works | Card found at boot (`mmcblk0`, SDHC 29.1 GiB, `mmcblk0p1`), 24 MHz, 4 bit, 3.3 V. Same setup as the E6 (polled, no card detect line). The earlier "no `mmcblk0`" was an empty slot. Rootfs on the card (`tools/sdroot.sh`, `e6.root=`) not tried on the N8 |
 | USB host / OTG | MUSB | 🔧 todo | Only the device side is set up |
 
 ## Input and sensors
@@ -36,7 +36,7 @@ State on 23.10.2026, Symbian Anna 024.001, `n8boot` loader, E6 kernel with the N
 | Accelerometer | ST LIS302DL, i2c-0 `0x1d` | ✅ works | `st_accel`, ~9.7 m/s2 lying flat |
 | Magnetometer | AK8974, i2c-0 `0x0f` | ✅ works | Reads ~1 G total: needs calibration for a compass |
 | Ambient light | TSL2563, i2c-1 `0x29` | ✅ works | |
-| Proximity | N1104, output on gpio 3 | 🔧 todo | One more `gpio-keys` entry (as a switch), level read like the keys |
+| Proximity | N1104, output on gpio 3 (VCC = VAUX1) | 🧪 test | `gpio-keys-polled` switch `SW_FRONT_PROXIMITY`; gpio 3 confirmed by `proximity.pdd`, near = high is inferred (check with `keytest`). See `work/leds-n8/NOTES.md` |
 
 ## Power
 
@@ -50,7 +50,8 @@ State on 23.10.2026, Symbian Anna 024.001, `n8boot` loader, E6 kernel with the N
 
 | Part | Hardware | Status | Notes |
 | --- | --- | --- | --- |
-| Menu key light, notification / white indicator LEDs | LED driver N2402 on i2c-1 `0x33` (LEDs V2420, V2422, V2411) | 🔧 todo | Answers at `0x33`, LP5523 address range: try mainline `leds-lp5523`. Which channel is which LED has to be found by trying. The white LED at the USB port may also be the charger's status LED |
+| Menu key light, indicator LED | LED driver N2402 = **TI LP5521** on i2c-1 `0x33`: R output -> V2420 + V2422, B output -> V2411, G unused | 🧪 test | Mainline `leds-lp5521` (ISA software has `hal_light_phy_lp5521.c`, the pinout matches). Currents capped at 5 mA until Symbian's value is read on the phone. See `work/leds-n8/NOTES.md` |
+| Charging LED | V2410 on the GAZOO `Chind` pin (schematic p5) | 🔬 research | Not on the LP5521: driven by the PMIC's charger indicator, probably the LED at the USB port |
 | Camera flash | Xenon flash + a separate LED (`ILED`), camera page of the schematic | 🔬 research | Probably switched together with the camera, through the VideoCore side |
 
 ## Display and graphics
@@ -67,7 +68,7 @@ State on 23.10.2026, Symbian Anna 024.001, `n8boot` loader, E6 kernel with the N
 
 | Part | Hardware | Status | Notes |
 | --- | --- | --- | --- |
-| WLAN | TI WL127x on SPI (gpio 74-77), IRQ gpio 73, enable on ball G9 | 🔧 todo | `wlcore` / `wl12xx` exist. NVS (MAC + calibration) dumped with `wldump.sis` through `wlanhwinit.dll` (see [n8-hardware.md](n8-hardware.md#wlan-calibration-nvs-and-mac-24102026)); its INI part needs converting to the Linux layout. Missing: a RapuYama SPI controller driver, the enable gpio, power / sleep clock |
+| WLAN | TI WL1271 PG2.0 on spi2 (`0x20020600`), IRQ genio73, enable genio100 (Linux gpio 612) | 🟡 SPI works | Kernel patch 0008 (`spi-rapuyama`, polled, half duplex: in a read each RXDATA read starts the next frame). `spitest` (in the initramfs) read chip id `04030111` over WSPI on 24.10.2026 with the defaults `io32=0 rxen=0`; `io32=1` or `rxen=7` read only zeros. Needs WLAN on in Symbian before the jump (the modem switches the 19.2 MHz reference clock). Test DTB: `work/dts-test/n8-spi.dtsi`. NVS (MAC + calibration) dumped with `wldump.sis` (see [n8-hardware.md](n8-hardware.md#wlan-calibration-nvs-and-mac-24102026)). `wlcore` (patches 0009-0011, `WLAN=1` build, `wlantest`) binds and reads the chip, then stops at `Top register access timed out`: the OCP bridge to the top registers doesn't answer (the earlier `wspitest` OCP results were void: it wrote the command to 0x9b8 instead of 0x9c0). n8boot now requests the 19.2 MHz reference clock (PRM 0x25) and drives genio100 before the jump (`E:\wlansteps.txt`); with it the chip's busy word changes and its registers read sane values (PLL_PARAMETERS 0xf03). Next: OCP with the fixed `wspitest`, then `wlantest` with `n8-wlan-keep.dtb` |
 | Bluetooth | BT/FM chip on a UART (`BTUART*`), reset gpio 54, wake gpio 53 | 🔧 todo | Needs a full RapuYama UART driver (only the early console exists, registers documented), then `hci_uart` |
 | FM radio / FM transmitter | in the BT/FM chip, FMIRQ gpio 23 | 🔬 research | Didn't answer on i2c-1, probably powered down |
 | GPS | separate module on I2C1, `GPS_EN_RESET`, `GPS_CLK` | 🔬 research | Proprietary protocol, no Linux driver |
@@ -92,7 +93,7 @@ State on 23.10.2026, Symbian Anna 024.001, `n8boot` loader, E6 kernel with the N
 ## Suggested order
 
 1. Secure watchdog for the N8 firmware (`swddump`), so Linux stays up longer than ~4 minutes and a watchdog reset returns to Symbian.
-2. LEDs (`leds-lp5523` at i2c-1 `0x33`), proximity sensor, power key.
+2. LEDs (`leds-lp5521` at i2c-1 `0x33`) and proximity sensor (in n8.dts, to test), power key.
 3. Charging (bq2415x, as on the E6).
 4. Bluetooth (UART driver), then WLAN (SPI driver).
 5. Camera, audio, GPS.
