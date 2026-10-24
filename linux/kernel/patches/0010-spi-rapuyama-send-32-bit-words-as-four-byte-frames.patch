@@ -1,0 +1,102 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Ruhan van der Berg <35257374+RuhanSA079@users.noreply.github.com>
+Date: Sat, 24 Oct 2026 13:30:00 +0200
+Subject: [PATCH] spi: rapuyama: send 32 bit words as four byte frames
+
+wlcore talks WSPI with 32 bit words. They went out as two 16 bit frames,
+a path never seen working: on the N8 every busy word read came back not
+ready ("SPI read busy-word timeout", "couldn't get hw info"), while the
+same chip id read with 8 bit transfers (wspitest) worked.
+
+Cut 32 bit words into four 8 bit frames, MSB first, the framing that
+worked. w32frame=16 (module parameter, also at run time) brings back the
+halfword frames.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/spi/spi-rapuyama.c | 40 +-
+ 1 file changed, 29 insertions(+), 11 deletions(-)
+
+--- a/drivers/spi/spi-rapuyama.c
++++ b/drivers/spi/spi-rapuyama.c
+@@ -88,6 +88,9 @@
+ static uint debug;
+ module_param(debug, uint, 0644);
+ MODULE_PARM_DESC(debug, "dump all registers around this many frames per transfer");
++static uint w32frame = 8;
++module_param(w32frame, uint, 0644);
++MODULE_PARM_DESC(w32frame, "frame size for 32 bit words: 8 (four byte frames, MSB first, default) or 16 (two halfword frames)");
+ 
+ /* shared block, phys 0x20020800 */
+ #define RY_SPI_SH_GATE	0x04	/* PowerResourceManager resource 0x0b */
+@@ -230,27 +233,44 @@
+ 	return readw(rs->base + RY_SPI_RXDATA);
+ }
+ 
++/* frames per 32 bit word: 4 byte frames (w32frame=8) or 2 halfword frames */
++static unsigned int ry_spi_fpw(void)
++{
++	return w32frame == 16 ? 2 : 4;
++}
++
++/*
++ * frame f of the buffer: bytes, halfwords, or a 32 bit word cut into
++ * frames MSB first (WSPI's word order on the wire)
++ */
+ static u16 ry_spi_half(const u8 *buf, unsigned int step, unsigned int f)
+ {
+-	/* frame f of the buffer: bytes, halfwords or 32 bit words high half first */
++	unsigned int fpw = ry_spi_fpw(), bits = 32 / fpw;
++	u32 w;
++
+ 	if (step == 1)
+ 		return buf[f];
+ 	if (step == 2)
+ 		return ((const u16 *)buf)[f];
+-	return f & 1 ? ((const u32 *)buf)[f / 2] & 0xffff :
+-		       ((const u32 *)buf)[f / 2] >> 16;
++	w = ((const u32 *)buf)[f / fpw];
++	return (w >> (32 - bits * (f % fpw + 1))) & (BIT(bits) - 1);
+ }
+ 
+ static void ry_spi_put(u8 *buf, unsigned int step, unsigned int f, u16 v)
+ {
+-	if (step == 1)
++	unsigned int fpw = ry_spi_fpw(), bits = 32 / fpw;
++	unsigned int shift = 32 - bits * (f % fpw + 1);
++	u32 *w = (u32 *)buf + f / fpw;
++
++	if (step == 1) {
+ 		buf[f] = v;
+-	else if (step == 2)
++	} else if (step == 2) {
+ 		((u16 *)buf)[f] = v;
+-	else if (f & 1)
+-		((u32 *)buf)[f / 2] = (((u32 *)buf)[f / 2] & 0xffff0000) | v;
+-	else
+-		((u32 *)buf)[f / 2] = (u32)v << 16;
++	} else {
++		if (f % fpw == 0)
++			*w = 0;
++		*w |= (u32)(v & (BIT(bits) - 1)) << shift;
++	}
+ }
+ 
+ /*
+@@ -357,10 +377,11 @@
+ 	struct ry_spi *rs = spi_controller_get_devdata(ctlr);
+ 	u32 bpw = xfer->bits_per_word;
+ 	unsigned int step = bpw == 8 ? 1 : bpw == 16 ? 2 : 4;
+-	unsigned int nf = xfer->len / step * (step == 4 ? 2 : 1);
++	unsigned int nf = xfer->len / step * (step == 4 ? ry_spi_fpw() : 1);
++	u32 fbits = step == 1 || (step == 4 && ry_spi_fpw() == 4) ? 8 : 16;
+ 	int ret;
+ 
+-	ret = ry_spi_config(rs, bpw == 8 ? 8 : 16, xfer->speed_hz, spi->mode);
++	ret = ry_spi_config(rs, fbits, xfer->speed_hz, spi->mode);
+ 	if (ret)
+ 		return ret;
+ 	xfer->effective_speed_hz = rs->fck / 2 / (rs->div + 1);
+-- 
+2.43.0
+
