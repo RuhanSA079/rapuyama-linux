@@ -366,7 +366,22 @@ GLDEF_C TInt E32Main(){
 	}else{
 		const TInt steps[3]={1, 2, 4};
 		const char* names[3]={"register", "clock 0x25 on", "genio100 high"};
-		for(TInt i=0; i<3; i++){
+		// E:\\wlansteps.txt "1" / "2" / "3": only the first n steps (default 3),
+		// to find which one makes the phone switch off after the jump
+		TInt n=3;
+		{
+			RFile f;
+			if(f.Open(gFs, _L("E:\\wlansteps.txt"), EFileRead)==KErrNone){
+				TBuf8<8> b;
+				f.Read(b);
+				f.Close();
+				TLex8 lx(b);
+				TInt v;
+				if(lx.Val(v)==KErrNone && v>=0 && v<=3){n=v;}
+			}
+		}
+		Lf(_L8("wlan clock: %d of 3 steps\n"), n);
+		for(TInt i=0; i<n; i++){
 			TUint32 w[5]={0, 0, 0, 0, 0};
 			TPtr8 p((TUint8*)w, 0, sizeof(w));
 			Lf(_L8("wlan clock: %s ...\n"), names[i]);
