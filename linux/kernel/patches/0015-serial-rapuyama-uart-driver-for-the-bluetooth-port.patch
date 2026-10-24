@@ -1,8 +1,8 @@
 ---
  drivers/tty/serial/Kconfig         |  10 +
  drivers/tty/serial/Makefile        |   1 +
- drivers/tty/serial/rapuyama_uart.c | 540 ++++++++++
- 3 files changed, 551 insertions(+)
+ drivers/tty/serial/rapuyama_uart.c | 564 ++++++++++
+ 3 files changed, 575 insertions(+)
  create mode 100644 drivers/tty/serial/rapuyama_uart.c
 
 diff --git a/drivers/tty/serial/Kconfig b/drivers/tty/serial/Kconfig
@@ -40,10 +40,10 @@ index 6954aa468..766288a3a 100644
  # These Sparc drivers have to appear before others such as 8250
 diff --git a/drivers/tty/serial/rapuyama_uart.c b/drivers/tty/serial/rapuyama_uart.c
 new file mode 100644
-index 000000000..8b77619c6
+index 000000000..156e6a19b
 --- /dev/null
 +++ b/drivers/tty/serial/rapuyama_uart.c
-@@ -0,0 +1,610 @@
+@@ -0,0 +1,636 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Nokia RapuYama UART (N8/E6/E7/C7), the port the bluetooth chip hangs off
@@ -142,6 +142,10 @@ index 000000000..8b77619c6
 +static bool pinmux = true;
 +module_param(pinmux, bool, 0644);
 +MODULE_PARM_DESC(pinmux, "put the BTUART pads in uart mode at startup, as bc02_uart1's power-on does");
++
++static bool set_line = true;
++module_param(set_line, bool, 0644);
++MODULE_PARM_DESC(set_line, "program 8N1 at startup (+0x14/+0x18/+0x1c), as the firmware's line config does; the baud divider is left alone");
 +
 +static bool enable_block;
 +module_param(enable_block, bool, 0644);
@@ -391,6 +395,28 @@ index 000000000..8b77619c6
 +			dev_info(port->dev, "enable now %08x\n",
 +				 ry_rd(port, RY_UART_ENABLE));
 +		}
++	}
++	/*
++	 * The block is handed over disabled, so the line registers could be
++	 * anything. bc02_uart1 FUN_8018f3f0 programs them for every config:
++	 * +0x14 = 7 (8 data bits, 6 = 7 bits), +0x18 = 0 (no parity),
++	 * +0x1c = 0 (stop). It takes the +0x04 lock around the whole thing,
++	 * and enables the block itself if +0x84 reads 0. The baud divider is
++	 * deliberately not touched here: see reconfigure=1.
++	 */
++	if (set_line) {
++		unsigned int spin = 100000;
++
++		while (ry_rd(port, RY_UART_BUSY) && --spin)
++			cpu_relax();
++		ry_wr(port, RY_UART_LOCK, 1);
++		ry_wr(port, RY_UART_BITS, RY_UART_BITS_8);
++		ry_wr(port, RY_UART_PARITY, 0);
++		ry_wr(port, RY_UART_PARITY_TYPE, 0);
++		ry_wr(port, RY_UART_LOCK, 0);
++		dev_info(port->dev, "line 8N1: bits %u parity %u stop %u\n",
++			 ry_rd(port, RY_UART_BITS), ry_rd(port, RY_UART_PARITY),
++			 ry_rd(port, RY_UART_PARITY_TYPE));
 +	}
 +	if (pinmux && ry->mux) {
 +		/* bc02_uart1 FUN_8018c554, in this order */
