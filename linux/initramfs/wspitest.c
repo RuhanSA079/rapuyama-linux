@@ -190,8 +190,8 @@ static int read32(const char *what, u32 addr, u32 *val)
 
 /*
  * wl12xx_top_reg_read: the "top" registers (fuses, clocks) sit behind the
- * chip's OCP bridge: address >> 1 + 0x30000 to OCP_POR_CTR, 2 (read) to
- * OCP_CMD, poll OCP_DATA_READ for bit 18 (ready), bits 17:16 = status
+ * chip's OCP bridge: address >> 1 + 0x30000 to OCP_POR_CTR (0x9b4), 2 (read) to
+ * OCP_CMD (0x9c0), poll OCP_DATA_READ (0x9bc) for bit 18 (ready), bits 17:16 = status
  * (1 = ok). In the boot partition register 0x300000 + x is at 0x14fc0 + x.
  * wlcore fails here on the N8 ("Top register access timed out")
  */
@@ -200,7 +200,7 @@ static void top_read(u32 reg)
 	u32 i, v = 0;
 
 	write32(0x14fc0 + 0x9b4, (reg >> 1) + 0x30000);
-	write32(0x14fc0 + 0x9b8, 2);
+	write32(0x14fc0 + 0x9c0, 2);	/* OCP_CMD: read (0x9b8 is OCP_POR_WDATA) */
 	for (i = 0; i < 32; i++) {
 		if (read32("ocp data", 0x14fc0 + 0x9bc, &v) < 0) {
 			puts_("  ocp data read: no ready busy word\n");
