@@ -1,8 +1,8 @@
 ---
  drivers/tty/serial/Kconfig         |  10 +
  drivers/tty/serial/Makefile        |   1 +
- drivers/tty/serial/rapuyama_uart.c | 414 ++++++++++
- 3 files changed, 425 insertions(+)
+ drivers/tty/serial/rapuyama_uart.c | 453 ++++++++++
+ 3 files changed, 464 insertions(+)
  create mode 100644 drivers/tty/serial/rapuyama_uart.c
 
 diff --git a/drivers/tty/serial/Kconfig b/drivers/tty/serial/Kconfig
@@ -40,10 +40,10 @@ index 6954aa468..766288a3a 100644
  # These Sparc drivers have to appear before others such as 8250
 diff --git a/drivers/tty/serial/rapuyama_uart.c b/drivers/tty/serial/rapuyama_uart.c
 new file mode 100644
-index 000000000..1577440f7
+index 000000000..16567556a
 --- /dev/null
 +++ b/drivers/tty/serial/rapuyama_uart.c
-@@ -0,0 +1,477 @@
+@@ -0,0 +1,516 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Nokia RapuYama UART (N8/E6/E7/C7), the port the bluetooth chip hangs off
@@ -109,6 +109,7 @@ index 000000000..1577440f7
 +#define RY_UART_RX_ERRORS	0xf00
 +
 +#define RY_UART_NR		1
++#define RY_UART_MAX_IRQ		4
 +#define RY_UART_FIFO		16	/* assumed, only bounds a tx burst */
 +
 +static uint poll_us;
@@ -126,6 +127,8 @@ index 000000000..1577440f7
 +	ktime_t poll_period;
 +	bool poll_on;
 +	bool tx_stopped;
++	int irq[RY_UART_MAX_IRQ];
++	int nirq;
 +};
 +
 +static inline struct ry_uart *to_ry(struct uart_port *port)
@@ -238,6 +241,17 @@ index 000000000..1577440f7
 +	unsigned long flags;
 +	u32 status;
 +
++	/*
++	 * Symbian leaves this line asserted, so the handler can run before
++	 * the port is registered and port->lock and port->state exist. The
++	 * irqs are only requested from startup() now, but shut the source up
++	 * rather than fault if it ever happens again.
++	 */
++	if (!port->state) {
++		writel(0, port->membase + RY_UART_IRQ_MASK);
++		writel(~0U, port->membase + RY_UART_IRQ_CLEAR);
++		return IRQ_HANDLED;
++	}
 +	uart_port_lock_irqsave(port, &flags);
 +	status = ry_rd(port, RY_UART_IRQ_STATUS);
 +	/* ack first: a status we cannot clear would storm */
@@ -302,17 +316,29 @@ index 000000000..1577440f7
 +static int ry_uart_startup(struct uart_port *port)
 +{
 +	struct ry_uart *ry = to_ry(port);
++	int i, ret;
 +
 +	ry->tx_stopped = false;
 +	/* Symbian left the block enabled; say so rather than reconfigure it */
 +	if (!(ry_rd(port, RY_UART_ENABLE) & RY_UART_TX_RX_ON))
 +		dev_warn(port->dev, "tx/rx not enabled (%08x), bluetooth off in symbian?\n",
 +			 ry_rd(port, RY_UART_ENABLE));
++	/* masked since probe; drop anything latched before we listen */
++	ry_wr(port, RY_UART_IRQ_MASK, 0);
 +	ry_wr(port, RY_UART_IRQ_CLEAR, ~0U);
 +	if (ry->poll_on) {
 +		hrtimer_start(&ry->poll_timer, ry->poll_period,
 +			      HRTIMER_MODE_REL);
 +		return 0;
++	}
++	for (i = 0; i < ry->nirq; i++) {
++		ret = request_irq(ry->irq[i], ry_uart_isr, 0,
++				  dev_name(port->dev), port);
++		if (ret) {
++			while (i--)
++				free_irq(ry->irq[i], port);
++			return ret;
++		}
 +	}
 +	ry_wr(port, RY_UART_IRQ_MASK, RY_UART_IRQ_ALL);
 +	return 0;
@@ -321,11 +347,16 @@ index 000000000..1577440f7
 +static void ry_uart_shutdown(struct uart_port *port)
 +{
 +	struct ry_uart *ry = to_ry(port);
++	int i;
 +
 +	ry_wr(port, RY_UART_IRQ_MASK, 0);
 +	ry_wr(port, RY_UART_IRQ_CLEAR, ~0U);
-+	if (ry->poll_on)
++	if (ry->poll_on) {
 +		hrtimer_cancel(&ry->poll_timer);
++		return;
++	}
++	for (i = 0; i < ry->nirq; i++)
++		free_irq(ry->irq[i], port);
 +}
 +
 +static void ry_uart_set_termios(struct uart_port *port, struct ktermios *new,
@@ -426,6 +457,13 @@ index 000000000..1577440f7
 +	if (IS_ERR(ry->port.membase))
 +		return PTR_ERR(ry->port.membase);
 +	ry->port.mapbase = res->start;
++	/*
++	 * Symbian hands the block over with its interrupts live. Mask and
++	 * clear before anything can request a line, or the handler runs on a
++	 * port that is not registered yet.
++	 */
++	writel(0, ry->port.membase + RY_UART_IRQ_MASK);
++	writel(~0U, ry->port.membase + RY_UART_IRQ_CLEAR);
 +	ry->port.dev = dev;
 +	ry->port.type = PORT_GENERIC;
 +	ry->port.iotype = UPIO_MEM;
@@ -448,19 +486,20 @@ index 000000000..1577440f7
 +		ry->poll_timer.function = ry_uart_poll;
 +		ry->port.irq = 0;
 +	} else {
-+		irq = platform_get_irq(pdev, 0);
-+		if (irq < 0)
-+			return irq;
-+		ry->port.irq = irq;
 +		/* the block raises two lines (99 and 101); which is rx and
-+		 * which is tx is not known, so both run the same handler
++		 * which is tx is not known, so both run the same handler.
++		 * They are requested in startup(), not here: this one fires
++		 * the moment it is requested.
 +		 */
-+		for (i = 0; (irq = platform_get_irq_optional(pdev, i)) > 0; i++) {
-+			ret = devm_request_irq(dev, irq, ry_uart_isr, 0,
-+					       dev_name(dev), &ry->port);
-+			if (ret)
-+				return dev_err_probe(dev, ret, "irq %d\n", irq);
++		for (i = 0; i < RY_UART_MAX_IRQ; i++) {
++			irq = platform_get_irq_optional(pdev, i);
++			if (irq <= 0)
++				break;
++			ry->irq[ry->nirq++] = irq;
 +		}
++		if (!ry->nirq)
++			return dev_err_probe(dev, -ENODEV, "no irq\n");
++		ry->port.irq = ry->irq[0];
 +	}
 +
 +	platform_set_drvdata(pdev, ry);
