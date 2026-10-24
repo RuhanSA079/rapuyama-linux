@@ -1,0 +1,210 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Ruhan van der Berg <35257374+RuhanSA079@users.noreply.github.com>
+Date: Sat, 24 Oct 2026 17:30:00 +0200
+Subject: [PATCH] gpio: rapuyama: polled pin irqs (nokia,irq-poll-us)
+
+On the N8 no pin irq reaches the intc. The WL1271's irq (genio73, intc
+line 389) toggles in the bank's raw state (0x20033488) and is enabled
+(0x20033498 = 0x200), but line 389 never fires, so wlcore's ELP wakeup
+times out right after the firmware boots. The routing (N8 egpio table
+0x800bd8a0: genio73 -> line 0x185), the enable (bank 0x04 + 0x10), the
+ack (0x20) and the intc unmask all match the firmware (egpio
+0x800bc6ec / 0x800bc79c / 0x800bd0e8, karap 0x800b447c).
+
+Until that is understood, "nokia,irq-poll-us" (or irq_poll_us=) runs
+the pin irqs off an hrtimer: every period it samples the raw state of
+the banks with unmasked pins and raises the irqs whose trigger matches
+(both edges and levels), the intc line stays masked.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpio/gpio-rapuyama.c | 116 +-
+ 1 file changed, 114 insertions(+), 2 deletions(-)
+
+--- a/drivers/gpio/gpio-rapuyama.c
++++ b/drivers/gpio/gpio-rapuyama.c
+@@ -32,13 +32,24 @@
+  *
+  * Which of 0x34/0x38 is high/rising is a guess (egpio takes 1 -> 0x38,
+  * 2 -> 0x34 and the callers don't tell), check it on hw.
++ *
++ * On the N8 no pin irq ever reaches the intc (WL1271 irq genio73 = line
++ * 389: the bank shows the pin toggle in 0x08 and the enable in 0x18, the
++ * line never fires), although the routing (N8 egpio table 0x800bd8a0) and
++ * the enable / ack order match the firmware. Until that is understood,
++ * "nokia,irq-poll-us" (or irq_poll_us=) runs the pin irqs off a timer: it
++ * samples 0x08 of the banks with enabled pins and raises the irqs whose
++ * trigger matches, the intc line stays masked.
+  */
+ 
+ #include <linux/bitops.h>
+ #include <linux/gpio/driver.h>
++#include <linux/hrtimer.h>
+ #include <linux/io.h>
+ #include <linux/irq.h>
+ #include <linux/mod_devicetable.h>
++#include <linux/module.h>
++#include <linux/of.h>
+ #include <linux/of_irq.h>
+ #include <linux/platform_device.h>
+ #include <linux/spinlock.h>
+@@ -79,12 +90,22 @@
+ 	{ 152, 152, 275 },
+ };
+ 
++static uint irq_poll_us;
++module_param(irq_poll_us, uint, 0444);
++MODULE_PARM_DESC(irq_poll_us, "poll the pin irqs every N us instead of the intc lines (overrides nokia,irq-poll-us)");
++
+ struct rapuyama_gpio {
+ 	struct gpio_chip gc;
+ 	void __iomem *base;
+ 	void __iomem *irq_base;
+ 	spinlock_t lock;
+ 	u32 dir_out[RY_GPIO_BANKS];	/* shadow, 1 = output */
++	/* polled irqs */
++	struct hrtimer poll_timer;
++	ktime_t poll_period;
++	u32 poll_en[RY_GPIO_IN_BANKS];	/* unmasked pins */
++	u32 poll_prev[RY_GPIO_IN_BANKS];	/* raw state at the last sample */
++	u8 poll_type[RY_GPIO_IN_BANKS * RY_GPIO_PER_BANK];
+ };
+ 
+ static int ry_bank(unsigned int off)
+@@ -202,9 +223,11 @@
+ 	/* firmware drops the bank enable once nothing is left on */
+ 	if (!readl(ry_irq_reg(ry, hw, RY_IRQ_ENABLED)))
+ 		writel(0, ry_irq_reg(ry, hw, RY_IRQ_BANK_EN));
++	ry->poll_en[ry_bank(hw)] &= ~ry_bit(hw);
+ 	spin_unlock_irqrestore(&ry->lock, flags);
+ 
+-	irq_chip_mask_parent(d);
++	if (!ry->poll_period)
++		irq_chip_mask_parent(d);
+ 	gpiochip_disable_irq(gc, hw);
+ }
+ 
+@@ -219,8 +242,81 @@
+ 	spin_lock_irqsave(&ry->lock, flags);
+ 	writel(1, ry_irq_reg(ry, hw, RY_IRQ_BANK_EN));
+ 	writel(ry_bit(hw), ry_irq_reg(ry, hw, RY_IRQ_EN));
++	if (ry->poll_period) {
++		int k = ry_bank(hw);
++
++		/* edges count from now, not from a stale sample */
++		if (!(ry->poll_en[k] & ry_bit(hw)))
++			ry->poll_prev[k] = (ry->poll_prev[k] & ~ry_bit(hw)) |
++				(readl(ry_irq_reg(ry, hw, RY_IRQ_RAW)) &
++				 ry_bit(hw));
++		ry->poll_en[k] |= ry_bit(hw);
++		if (!hrtimer_is_queued(&ry->poll_timer) &&
++		    !hrtimer_callback_running(&ry->poll_timer))
++			hrtimer_start(&ry->poll_timer, ry->poll_period,
++				      HRTIMER_MODE_REL);
++	}
+ 	spin_unlock_irqrestore(&ry->lock, flags);
+-	irq_chip_unmask_parent(d);
++	if (!ry->poll_period)
++		irq_chip_unmask_parent(d);
++}
++
++/*
++ * polled pin irqs: one sample of the raw state of every bank with unmasked
++ * pins, raise the pins whose trigger matches. hrtimer callback = hardirq
++ * context, as a real parent irq would be. once started the timer keeps
++ * running (no race with an unmask while it stops), idle it only reads the
++ * enable shadows
++ */
++static enum hrtimer_restart rapuyama_gpio_poll(struct hrtimer *t)
++{
++	struct rapuyama_gpio *ry = container_of(t, struct rapuyama_gpio,
++						poll_timer);
++	int k;
++
++	for (k = 0; k < RY_GPIO_IN_BANKS; k++) {
++		unsigned long en, fire = 0;
++		u32 raw = 0, prev = 0;
++		int bit;
++
++		spin_lock(&ry->lock);
++		en = ry->poll_en[k];
++		if (en) {
++			raw = readl(ry->irq_base + RY_IRQ_BANK(k) + RY_IRQ_RAW);
++			prev = ry->poll_prev[k];
++			ry->poll_prev[k] = raw;
++		}
++		spin_unlock(&ry->lock);
++		if (!en)
++			continue;
++		for_each_set_bit(bit, &en, RY_GPIO_PER_BANK) {
++			u32 m = BIT(bit);
++			bool now = raw & m, was = prev & m;
++
++			switch (ry->poll_type[k * RY_GPIO_PER_BANK + bit]) {
++			case IRQ_TYPE_EDGE_RISING:
++				fire |= (now && !was) ? m : 0;
++				break;
++			case IRQ_TYPE_EDGE_FALLING:
++				fire |= (!now && was) ? m : 0;
++				break;
++			case IRQ_TYPE_EDGE_BOTH:
++				fire |= (now != was) ? m : 0;
++				break;
++			case IRQ_TYPE_LEVEL_HIGH:
++				fire |= now ? m : 0;
++				break;
++			case IRQ_TYPE_LEVEL_LOW:
++				fire |= !now ? m : 0;
++				break;
++			}
++		}
++		for_each_set_bit(bit, &fire, RY_GPIO_PER_BANK)
++			generic_handle_domain_irq(ry->gc.irq.domain,
++						  k * RY_GPIO_PER_BANK + bit);
++	}
++	hrtimer_forward_now(t, ry->poll_period);
++	return HRTIMER_RESTART;
+ }
+ 
+ static void rapuyama_gpio_irq_ack(struct irq_data *d)
+@@ -240,6 +336,18 @@
+ 	unsigned int trig, pol;
+ 	unsigned long flags;
+ 
++	if (ry->poll_period) {
++		/* the sampler does the trigger, both edges included */
++		if (!(type & IRQ_TYPE_SENSE_MASK))
++			return -EINVAL;
++		ry->poll_type[hw] = type & IRQ_TYPE_SENSE_MASK;
++		if (type & IRQ_TYPE_EDGE_BOTH)
++			irq_set_handler_locked(d, handle_edge_irq);
++		else
++			irq_set_handler_locked(d, handle_level_irq);
++		return 0;
++	}
++
+ 	switch (type & IRQ_TYPE_SENSE_MASK) {
+ 	case IRQ_TYPE_EDGE_RISING:
+ 		trig = RY_IRQ_EDGE;
+@@ -382,6 +490,18 @@
+ 		girq->init_valid_mask = rapuyama_gpio_init_valid_mask;
+ 		girq->handler = handle_bad_irq;
+ 		girq->default_type = IRQ_TYPE_NONE;
++
++		if (!irq_poll_us)
++			of_property_read_u32(dev->of_node, "nokia,irq-poll-us",
++					     &irq_poll_us);
++		if (irq_poll_us) {
++			ry->poll_period = ns_to_ktime((u64)irq_poll_us * NSEC_PER_USEC);
++			hrtimer_init(&ry->poll_timer, CLOCK_MONOTONIC,
++				     HRTIMER_MODE_REL);
++			ry->poll_timer.function = rapuyama_gpio_poll;
++			dev_info(dev, "pin irqs polled every %u us\n",
++				 irq_poll_us);
++		}
+ 	} else {
+ 		of_node_put(parent_np);
+ 	}
+-- 
+2.43.0
+
